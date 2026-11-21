@@ -51,7 +51,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       }
       .active-alert-wrap {
         position: sticky;
-        top: 64px;
+        top: calc(68px + env(safe-area-inset-top));
         z-index: 1010;
         margin-bottom: 16px;
       }
@@ -558,13 +558,13 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             "      <div class='fw-bold mt-1' style='font-size: 16px; color: #17324d;'>" + escapeHtml(alarm.title) + "</div>" +
             "    </div>" +
             "    <label class='switch' aria-label='알람 활성 토글'>" +
-            "      <input type='checkbox' " + (alarm.enabled ? "checked" : "") + " onchange='toggleAlarm(\"" + alarm.id + "\", this.checked)' />" +
+            "      <input type='checkbox' " + (alarm.enabled ? "checked" : "") + " onchange='toggleAlarm(\\\"" + alarm.id + "\\\", this.checked)' />" +
             "      <span class='slider round'></span>" +
             "    </label>" +
             "  </div>" +
             "  <div class='d-flex justify-content-end gap-2 mt-3 pt-2 border-top'>" +
-            "    <button type='button' class='btn btn-outline-secondary btn-sm px-3' style='font-size: 12px;' onclick='openEditModal(\"" + alarm.id + "\")'>수정</button>" +
-            "    <button type='button' class='btn btn-outline-danger btn-sm px-3' style='font-size: 12px;' onclick='deleteAlarm(\"" + alarm.id + "\")'>삭제</button>" +
+            "    <button type='button' class='btn btn-outline-secondary btn-sm px-3' style='font-size: 12px;' onclick='openEditModal(\\\"" + alarm.id + "\\\")'>수정</button>" +
+            "    <button type='button' class='btn btn-outline-danger btn-sm px-3' style='font-size: 12px;' onclick='deleteAlarm(\\\"" + alarm.id + "\\\")'>삭제</button>" +
             "  </div>" +
             "</div>";
         });
