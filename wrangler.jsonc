@@ -1,0 +1,19 @@
+{
+  "name": "temp-alarm",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-21",
+  "triggers": {
+    // UTC 12, 15, 18, 21시 정각 = KST(한국시간) 21:00, 00:00, 03:00, 06:00 정각
+    "crons": ["0 12,15,18,21 * * *"]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "ALARM_KV",
+      "id": "858abf629ca449d98094840aac1a1c7c"
+    }
+  ],
+  "vars": {
+    "HOME_URL": "https://sisulmansa.github.io/temp_alarm/index.html",
+    "PATROL_URL": "https://sisulmansa.github.io/dp3/work_guide/dawn_temperature_roadmap.html"
+  }
+}
