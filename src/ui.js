@@ -449,7 +449,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         }
 
         tempEl.textContent = lc.temp.toFixed(1) + "℃";
-        metaEl.textContent =
+        metaEl.innerHTML =
           "관측기준: " + lc.observedAt + " (" + lc.source + ") <br>· 확인: " + (lc.checkedAt || "");
       }
 
