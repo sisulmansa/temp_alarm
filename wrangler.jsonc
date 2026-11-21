@@ -1,5 +1,5 @@
 {
-  "name": "temp-alarm",
+  "name": "still-dawn-1143freeze-alert",
   "main": "src/index.js",
   "compatibility_date": "2026-11-21",
   "triggers": {
@@ -13,7 +13,7 @@
     }
   ],
   "vars": {
-    "APP_URL": "https://temp-alarm.sisulmansa.workers.dev",
+    "APP_URL": "https://still-dawn-1143freeze-alert.sisulmansa.workers.dev",
     "HOME_URL": "https://sisulmansa.github.io/dp3/index.html",
     "PATROL_URL": "https://sisulmansa.github.io/dp3/work_guide/dawn_temperature_roadmap.html"
   }
