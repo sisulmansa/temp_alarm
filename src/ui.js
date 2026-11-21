@@ -304,7 +304,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         <div class="text-center text-muted mt-4" style="font-size: 12px; line-height: 1.6;">
           • 여러 알람 조건이 동시에 충족되면 <b>가장 낮은 온도 1개</b>만 발송<br />
           • 아이폰 Bark 긴급 알림(무음·수면 돌파 / 30초 연속 벨소리)<br /><br />
-          &copy;Developed by AnSangHyun 2026
+          &copy; Designed by AnSangHyun 2026
         </div>
       </main>
     </div>
@@ -450,7 +450,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
 
         tempEl.textContent = lc.temp.toFixed(1) + "℃";
         metaEl.textContent =
-          "관측기준: " + lc.observedAt + " (" + lc.source + ") · 확인: " + (lc.checkedAt || "");
+          "관측기준: " + lc.observedAt + " (" + lc.source + ") <br>· 확인: " + (lc.checkedAt || "");
       }
 
       function renderActiveAlert() {
