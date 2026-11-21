@@ -302,7 +302,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
 
         <!-- 안내 푸터 -->
         <div class="text-center text-muted mt-4" style="font-size: 12px; line-height: 1.6;">
-          • 여러 알람 조건이 동시에 충족되면 <b>가장 낮은(심각한) 온도 1개</b>만 발송됩니다.<br />
+          • 여러 알람 조건이 동시에 충족되면 <b>가장 낮은 온도 1개</b>만 발송됩니다.<br />
           • 아이폰 Bark 긴급 알림(무음·수면 돌파 / 30초 연속 벨소리)으로 울립니다.
         </div>
       </main>
