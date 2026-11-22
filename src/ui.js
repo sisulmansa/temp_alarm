@@ -550,7 +550,6 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             "<div class='panel-card text-center py-4 text-muted'>" +
             "<div style='font-size: 28px;'>🔕</div>" +
             "<div class='fw-bold mt-2 text-dark'>등록된 온도 알람이 없습니다.</div>" +
-            "<div class='small mt-1'>우측 상단 <b>+ 추가</b> 버튼을 눌러 최대 5개까지 구간을 설정하세요.</div>" +
             "</div>";
           return;
         }
