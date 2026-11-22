@@ -472,7 +472,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         tempEl.textContent = lc.temp.toFixed(1) + "℃";
         metaEl.innerHTML =
           "관측기준: " + escapeHtml(lc.observedAt) + " (" + escapeHtml(lc.source) + ")" +
-          "<br>확인: " + escapeHtml(lc.checkedAt || "") + " · 1분 자동갱신";
+          "<br>확인: " + escapeHtml(lc.checkedAt || "") + " · 5분 자동갱신";
       }
 
       function renderActiveAlert() {
