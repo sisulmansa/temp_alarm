@@ -348,10 +348,9 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 다른 알람과 구간이 겹치지 않도록 설정하세요. (예: -5 ~ 0℃ / -10 ~ -5.1℃)
               </div>
               <div class="d-flex flex-wrap gap-2 mt-2">
-                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-5, 0)">-5 ~ 0℃</button>
-                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-10, -5.1)">-10 ~ -5.1℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-15, -10.1)">-15 ~ -10.1℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -15.1)">-40 ~ -15.1℃</button>
+                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-4.9, 0)">-4.9 ~ 0℃</button>
+                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-9.9, -5.0)">-9.9 ~ -5.0℃</button>
+                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -10.0)">-40 ~ -10.0℃</button>
               </div>
             </div>
 
@@ -376,7 +375,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <option value="multiwayinvitation">초대음 (Multiway Invitation)</option>
               </select>
               <div class="form-text" style="font-size: 12px;">
-                기본 알람벨(Alarm)이 기본값으로 적용되며, Bark 앱 내장 벨소리 중 선택할 수 있습니다.
+                기본 알람벨(Alarm)이 기본값이며, Bark 앱 내장 벨소리 중 선택 가능
               </div>
             </div>
           </div>
@@ -396,7 +395,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
     <script>
       const PATROL_URL = ${JSON.stringify(safePatrolUrl)};
       const HOME_URL = ${JSON.stringify(homeUrl || "")};
-      const AUTO_REFRESH_MS = 60 * 1000; // 1분마다 자동 갱신
+      const AUTO_REFRESH_MS = 5 * 60 * 1000; // 5분마다 자동 갱신
       const SOUND_LABELS = {
         alarm: "기본 알람벨",
         bell: "벨소리",
