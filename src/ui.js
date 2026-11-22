@@ -528,7 +528,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           card.classList.add("paused");
           badge.className = "badge bg-secondary ms-1";
           badge.textContent = "휴무일 일시정지";
-          desc.textContent = "전체 알람이 일시정지되었습니다. 출근 시 다시 켜주세요.";
+          desc.textContent = "다시 켜려면 스위치를 ON으로 변경하세요.";
           pill.className = "badge rounded-pill bg-secondary px-3 py-2";
           pill.textContent = "일시정지됨";
         }
