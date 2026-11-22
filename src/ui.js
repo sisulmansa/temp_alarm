@@ -211,7 +211,6 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         <div class="d-flex justify-content-between align-items-center">
           <div>
             <h1 class="h5 fw-bold mb-0">🌡️ 외기온도 알람</h1>
-            <div class="small text-white-50" style="font-size: 12px;">${locationName} (자동감시 21·00·03·06시)</div>
           </div>
           <a id="homeBtn" href="${safeHomeUrl}" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1 fw-bold" style="font-size: 12px;">
             Home
@@ -277,7 +276,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <span id="masterBadge" class="badge bg-success ms-1" style="font-size: 11px;">작동 중</span>
               </div>
               <div id="masterDesc" class="text-muted mt-1" style="font-size: 12.5px;">
-                21시 · 00시 · 03시 · 06시 정각에 설정 온도 구간 진입 시 긴급 알림
+                21시 · 00시 · 03시 · 06시 정각에 긴급 알림
               </div>
             </div>
             <label class="switch ms-3" aria-label="전체 알람 감시 마스터 스위치">
