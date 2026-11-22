@@ -655,10 +655,10 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           return;
         }
         document.getElementById("editAlarmId").value = "";
-        document.getElementById("modalTitle").textContent = "➕ 새 온도 알람 추가";
-        document.getElementById("alarmTitleInput").value = "";
-        document.getElementById("alarmMinTempInput").value = "-5";
-        document.getElementById("alarmMaxTempInput").value = "0";
+        document.getElementById("modalTitle").textContent = "✨ 새 온도 알람 추가";
+        document.getElementById("alarmTitleInput").value = "동파주의ㆍ새벽 온도순찰";
+        document.getElementById("alarmMinTempInput").value = "-9.9";
+        document.getElementById("alarmMaxTempInput").value = "-5.0";
         document.getElementById("alarmSoundSelect").value = "alarm";
         alarmModal.show();
       }
