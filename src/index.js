@@ -100,8 +100,10 @@ function normalizeActiveAlert(alertObj) {
 
 // 입력값(최저/최고 온도) 검증
 function parseTempRange(minRaw, maxRaw) {
-  if (minRaw === "" || minRaw === null || minRaw === undefined ||
-      maxRaw === "" || maxRaw === null || maxRaw === undefined) {
+  if (
+    minRaw === "" || minRaw === null || minRaw === undefined ||
+    maxRaw === "" || maxRaw === null || maxRaw === undefined
+  ) {
     return { error: "최저 온도와 최고 온도를 모두 입력해 주세요." };
   }
 
@@ -382,7 +384,6 @@ async function sendBarkAlert(env, { alarm, temp, observedAt, origin, isTest = fa
 }
 
 // 현재 외기온도가 [최저온도 ~ 최고온도] 구간에 해당하는 알람 선정
-// (구간 중복을 방지하지만, 혹시 겹친 항목이 있으면 더 낮은 구간 1개 우선)
 function pickMatchedAlarm(alarms, currentTemp) {
   const matched = alarms.filter(
     (a) =>
@@ -493,14 +494,30 @@ export default {
         return jsonResponse({ ok: true, state });
       }
 
-      // 3) 마곡동 외기온도 즉시 새로고침
+      // 3) 마곡동 외기온도 새로고침 (1분 자동갱신 대응: 기온·관측시각 변동 시에만 KV 저장)
       if (pathname === "/api/temp" && method === "GET") {
         const state = await loadState(env);
         const tempInfo = await fetchMagokTemp(env);
+
+        const prev = state.lastCheck;
+        const shouldSaveKv =
+          !prev ||
+          prev.temp !== tempInfo.temp ||
+          prev.observedAt !== tempInfo.observedAt ||
+          state.appOrigin !== url.origin;
+
         state.lastCheck = tempInfo;
         state.appOrigin = url.origin;
-        await saveState(env, state);
-        return jsonResponse({ ok: true, lastCheck: tempInfo });
+
+        if (shouldSaveKv) {
+          await saveState(env, state);
+        }
+
+        return jsonResponse({
+          ok: true,
+          lastCheck: tempInfo,
+          activeAlert: state.activeAlert
+        });
       }
 
       // 4) 휴무일 마스터 스위치 토글
@@ -659,7 +676,6 @@ export default {
           }
         }
 
-        // 현재 온도에 맞는 알람이 있으면 우선 선택, 없으면 활성 알람 중 최저 구간 선택
         const matchedNow = pickMatchedAlarm(state.alarms, tempInfo.temp);
         const enabledAlarms = state.alarms
           .filter((a) => a.enabled)

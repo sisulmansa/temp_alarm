@@ -331,7 +331,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <div class="col">
                   <div class="input-group">
                     <span class="input-group-text small fw-bold bg-light">최저</span>
-                    <input type="number" id="alarmMinTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
+                    <input type="number" id="alarmMinTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" placeholder="-10" />
                     <span class="input-group-text fw-bold">℃</span>
                   </div>
                 </div>
@@ -339,18 +339,19 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <div class="col">
                   <div class="input-group">
                     <span class="input-group-text small fw-bold bg-light">최고</span>
-                    <input type="number" id="alarmMaxTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
+                    <input type="number" id="alarmMaxTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" placeholder="-5.1" />
                     <span class="input-group-text fw-bold">℃</span>
                   </div>
                 </div>
               </div>
               <div class="form-text" style="font-size: 12px;">
-                다른 알람과 구간이 겹치지 않도록 설정하세요.
+                다른 알람과 구간이 겹치지 않도록 설정하세요. (예: -5 ~ 0℃ / -10 ~ -5.1℃)
               </div>
               <div class="d-flex flex-wrap gap-2 mt-2">
-                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-4.9, 0)">-4.9 ~ 0℃</button>
-                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-9.9, -5.0)">-9.9 ~ -5.0℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -10.0)">-40 ~ -10.0℃</button>
+                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-5, 0)">-5 ~ 0℃</button>
+                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-10, -5.1)">-10 ~ -5.1℃</button>
+                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-15, -10.1)">-15 ~ -10.1℃</button>
+                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -15.1)">-40 ~ -15.1℃</button>
               </div>
             </div>
 
@@ -395,6 +396,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
     <script>
       const PATROL_URL = ${JSON.stringify(safePatrolUrl)};
       const HOME_URL = ${JSON.stringify(homeUrl || "")};
+      const AUTO_REFRESH_MS = 60 * 1000; // 1분마다 자동 갱신
       const SOUND_LABELS = {
         alarm: "기본 알람벨",
         bell: "벨소리",
@@ -422,6 +424,9 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       };
       let alarmModal = null;
       let toastTimer = null;
+      let autoRefreshTimer = null;
+      let isTempLoading = false;
+      let lastFetchAt = 0;
 
       function showToast(msg) {
         const box = document.getElementById("toastBox");
@@ -468,7 +473,8 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
 
         tempEl.textContent = lc.temp.toFixed(1) + "℃";
         metaEl.innerHTML =
-          "관측기준: " + lc.observedAt + " (" + lc.source + ") <br>확인: " + (lc.checkedAt || "");
+          "관측기준: " + escapeHtml(lc.observedAt) + " (" + escapeHtml(lc.source) + ")" +
+          "<br>확인: " + escapeHtml(lc.checkedAt || "") + " · 1분 자동갱신";
       }
 
       function renderActiveAlert() {
@@ -550,7 +556,6 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           return;
         }
 
-        // 높은 온도 구간부터 낮은(심각한) 온도 구간 순으로 정렬
         const sorted = alarms.slice().sort(function (a, b) {
           return b.maxTemp - a.maxTemp || b.minTemp - a.minTemp;
         });
@@ -611,21 +616,51 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       }
 
       async function refreshTemp(notify) {
+        if (isTempLoading) return;
+        isTempLoading = true;
+
         const btn = document.getElementById("refreshTempBtn");
-        btn.disabled = true;
-        btn.textContent = "조회 중...";
+        if (notify) {
+          btn.disabled = true;
+          btn.textContent = "조회 중...";
+        }
+
         try {
           const data = await apiRequest("/api/temp");
+          lastFetchAt = Date.now();
           appState.lastCheck = data.lastCheck;
           renderTemp();
+
+          if (data.activeAlert !== undefined) {
+            const prevAlert = JSON.stringify(appState.activeAlert);
+            const nextAlert = JSON.stringify(data.activeAlert);
+            if (prevAlert !== nextAlert) {
+              appState.activeAlert = data.activeAlert;
+              renderActiveAlert();
+              renderAlarms();
+            }
+          }
+
           if (notify) showToast("마곡동 최신 기온을 갱신했습니다.");
         } catch (err) {
           document.getElementById("tempMeta").textContent = "조회 오류: " + err.message;
           if (notify) showToast("기온 조회 실패: " + err.message);
         } finally {
-          btn.disabled = false;
-          btn.textContent = "🔄 온도 새로고침";
+          isTempLoading = false;
+          if (notify) {
+            btn.disabled = false;
+            btn.textContent = "🔄 온도 새로고침";
+          }
         }
+      }
+
+      function startAutoRefresh() {
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        autoRefreshTimer = setInterval(function () {
+          if (!document.hidden) {
+            refreshTemp(false);
+          }
+        }, AUTO_REFRESH_MS);
       }
 
       async function toggleMaster(enabled) {
@@ -788,6 +823,12 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         }
       }
 
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden && Date.now() - lastFetchAt >= 10000) {
+          refreshTemp(false);
+        }
+      });
+
       document.addEventListener("DOMContentLoaded", function () {
         alarmModal = new bootstrap.Modal(document.getElementById("alarmModal"));
         const homeBtn = document.getElementById("homeBtn");
@@ -798,6 +839,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           });
         }
         loadInitialState();
+        startAutoRefresh();
       });
     </script>
   </body>

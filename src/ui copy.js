@@ -177,12 +177,12 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         border-radius: 50%;
       }
 
-      /* 온도 빠른 선택 칩 */
+      /* 온도 구간 빠른 선택 칩 */
       .preset-chip {
         border-radius: 999px;
-        font-size: 13px;
+        font-size: 12.5px;
         font-weight: 700;
-        padding: 5px 12px;
+        padding: 5px 11px;
       }
 
       /* 하단 토스트 메시지 */
@@ -277,7 +277,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <span id="masterBadge" class="badge bg-success ms-1" style="font-size: 11px;">작동 중</span>
               </div>
               <div id="masterDesc" class="text-muted mt-1" style="font-size: 12.5px;">
-                21시 · 00시 · 03시 · 06시 정각에 설정 온도 이하 시 긴급 알림
+                21시 · 00시 · 03시 · 06시 정각에 설정 온도 구간 진입 시 긴급 알림
               </div>
             </div>
             <label class="switch ms-3" aria-label="전체 알람 감시 마스터 스위치">
@@ -290,7 +290,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         <!-- 4. 알람 목록 헤더 & + 추가 버튼 -->
         <div class="d-flex justify-content-between align-items-center mb-2 mt-3 px-1">
           <h2 class="h6 fw-bold mb-0" style="color: #17324d;">
-            ⏰ 설정된 온도 알람 (<span id="alarmCount">0</span> / 5)
+            ⏰ 설정된 온도 구간 알람 (<span id="alarmCount">0</span> / 5)
           </h2>
           <button id="addAlarmBtn" type="button" class="btn btn-primary btn-sm rounded-pill px-3 fw-bold shadow-sm" style="background-color: #17324d; border-color: #17324d;" onclick="openAddModal()">
             + 추가
@@ -302,7 +302,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
 
         <!-- 안내 푸터 -->
         <div class="text-center text-muted mt-4" style="font-size: 12px; line-height: 1.6;">
-          • 여러 알람 조건이 동시에 충족되면 <b>가장 낮은 온도 1개</b>만 발송<br />
+          • 알람별로 <b>최저 ~ 최고 온도 구간</b>을 설정해 중복 없이 감시<br />
           • 아이폰 Bark 긴급 알림(무음·수면 돌파 / 30초 연속 벨소리)<br />
           <p style="margin-top:8px">&copy; Designed by AnSangHyun 2026</p>
         </div>
@@ -326,17 +326,31 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             </div>
 
             <div class="mb-3">
-              <label for="alarmThresholdInput" class="form-label fw-bold small">알람 기준 온도 (℃ 이하일 때 발송)</label>
-              <div class="input-group">
-                <input type="number" id="alarmThresholdInput" class="form-control fw-bold" step="0.5" min="-40" max="50" placeholder="-5" />
-                <span class="input-group-text fw-bold">℃ 이하</span>
+              <label class="form-label fw-bold small">알람 온도 구간 (최저 ℃ 이상 ~ 최고 ℃ 이하)</label>
+              <div class="row g-2 align-items-center">
+                <div class="col">
+                  <div class="input-group">
+                    <span class="input-group-text small fw-bold bg-light">최저</span>
+                    <input type="number" id="alarmMinTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
+                    <span class="input-group-text fw-bold">℃</span>
+                  </div>
+                </div>
+                <div class="col-auto fw-bold text-secondary px-0">~</div>
+                <div class="col">
+                  <div class="input-group">
+                    <span class="input-group-text small fw-bold bg-light">최고</span>
+                    <input type="number" id="alarmMaxTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
+                    <span class="input-group-text fw-bold">℃</span>
+                  </div>
+                </div>
+              </div>
+              <div class="form-text" style="font-size: 12px;">
+                다른 알람과 구간이 겹치지 않도록 설정하세요.
               </div>
               <div class="d-flex flex-wrap gap-2 mt-2">
-                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetTemp(0)">0℃</button>
-                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetTemp(-3)">-3℃</button>
-                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetTemp(-5)">-5℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetTemp(-10)">-10℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetTemp(-15)">-15℃</button>
+                <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-4.9, 0)">-4.9 ~ 0℃</button>
+                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-9.9, -5.0)">-9.9 ~ -5.0℃</button>
+                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -10.0)">-40 ~ -10.0℃</button>
               </div>
             </div>
 
@@ -428,6 +442,10 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           .replace(/'/g, "&#39;");
       }
 
+      function formatRange(minTemp, maxTemp) {
+        return minTemp + "℃ ~ " + maxTemp + "℃";
+      }
+
       async function apiRequest(url, options) {
         const res = await fetch(url, options || {});
         const data = await res.json();
@@ -471,9 +489,9 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         document.getElementById("alertDetail").innerHTML =
           "현재 마곡동 외기온도 <strong class='text-danger'>" +
           Number(alertObj.currentTemp).toFixed(1) +
-          "℃</strong> (설정 기준: <strong>" +
-          alertObj.threshold +
-          "℃ 이하</strong>)<br><span class='text-muted'>" +
+          "℃</strong> (설정 구간: <strong>" +
+          formatRange(alertObj.minTemp, alertObj.maxTemp) +
+          "</strong>)<br><span class='text-muted'>" +
           escapeHtml(alertObj.observedAt || "") +
           "</span>";
 
@@ -499,7 +517,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           card.classList.remove("paused");
           badge.className = "badge bg-success ms-1";
           badge.textContent = "작동 중";
-          desc.textContent = "21시 · 00시 · 03시 · 06시 정각에 설정 온도 이하 시 긴급 알림";
+          desc.textContent = "21시 · 00시 · 03시 · 06시 정각에 설정 온도 구간 진입 시 긴급 알림";
           pill.className = "badge rounded-pill bg-success bg-opacity-75 px-3 py-2";
           pill.textContent = "자동 감시 ON";
         } else {
@@ -527,13 +545,14 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             "<div class='panel-card text-center py-4 text-muted'>" +
             "<div style='font-size: 28px;'>🔕</div>" +
             "<div class='fw-bold mt-2 text-dark'>등록된 온도 알람이 없습니다.</div>" +
-            "<div class='small mt-1'>우측 상단 <b>+ 추가</b> 버튼을 눌러 최대 5개까지 설정하세요.</div>" +
+            "<div class='small mt-1'>우측 상단 <b>+ 추가</b> 버튼을 눌러 최대 5개까지 구간을 설정하세요.</div>" +
             "</div>";
           return;
         }
 
+        // 높은 온도 구간부터 낮은(심각한) 온도 구간 순으로 정렬
         const sorted = alarms.slice().sort(function (a, b) {
-          return b.threshold - a.threshold;
+          return b.maxTemp - a.maxTemp || b.minTemp - a.minTemp;
         });
 
         const triggeredId = appState.activeAlert ? appState.activeAlert.alarmId : null;
@@ -552,7 +571,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             "  <div class='d-flex justify-content-between align-items-start gap-2'>" +
             "    <div class='flex-grow-1'>" +
             "      <div class='d-flex align-items-center flex-wrap gap-2 mb-1'>" +
-            "        <span class='threshold-badge'>" + alarm.threshold + "℃ 이하</span>" +
+            "        <span class='threshold-badge'>" + formatRange(alarm.minTemp, alarm.maxTemp) + "</span>" +
             (isTriggered ? "<span class='badge bg-danger'>발동 중</span>" : "") +
             "        <span class='badge bg-light text-secondary border' style='font-size: 11px;'>🔔 " + escapeHtml(soundLabel) + "</span>" +
             "      </div>" +
@@ -625,8 +644,9 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         }
       }
 
-      function setPresetTemp(val) {
-        document.getElementById("alarmThresholdInput").value = String(val);
+      function setPresetRange(minVal, maxVal) {
+        document.getElementById("alarmMinTempInput").value = String(minVal);
+        document.getElementById("alarmMaxTempInput").value = String(maxVal);
       }
 
       function openAddModal() {
@@ -635,9 +655,10 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           return;
         }
         document.getElementById("editAlarmId").value = "";
-        document.getElementById("modalTitle").textContent = "➕ 새 온도 알람 추가";
-        document.getElementById("alarmTitleInput").value = "";
-        document.getElementById("alarmThresholdInput").value = "-5";
+        document.getElementById("modalTitle").textContent = "✨ 새 온도 알람 추가";
+        document.getElementById("alarmTitleInput").value = "동파주의ㆍ새벽 온도순찰";
+        document.getElementById("alarmMinTempInput").value = "-9.9";
+        document.getElementById("alarmMaxTempInput").value = "-5.0";
         document.getElementById("alarmSoundSelect").value = "alarm";
         alarmModal.show();
       }
@@ -651,7 +672,8 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         document.getElementById("editAlarmId").value = target.id;
         document.getElementById("modalTitle").textContent = "✏️ 온도 알람 수정";
         document.getElementById("alarmTitleInput").value = target.title;
-        document.getElementById("alarmThresholdInput").value = String(target.threshold);
+        document.getElementById("alarmMinTempInput").value = String(target.minTemp);
+        document.getElementById("alarmMaxTempInput").value = String(target.maxTemp);
         document.getElementById("alarmSoundSelect").value = target.sound || "alarm";
         alarmModal.show();
       }
@@ -659,15 +681,24 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       async function saveAlarm() {
         const id = document.getElementById("editAlarmId").value;
         const title = document.getElementById("alarmTitleInput").value.trim();
-        const thresholdRaw = document.getElementById("alarmThresholdInput").value;
+        const minRaw = document.getElementById("alarmMinTempInput").value;
+        const maxRaw = document.getElementById("alarmMaxTempInput").value;
         const sound = document.getElementById("alarmSoundSelect").value;
 
         if (!title) {
           alert("알람 타이틀을 입력해 주세요.");
           return;
         }
-        if (thresholdRaw === "" || isNaN(Number(thresholdRaw))) {
-          alert("기준 온도를 숫자로 입력해 주세요.");
+        if (minRaw === "" || maxRaw === "" || isNaN(Number(minRaw)) || isNaN(Number(maxRaw))) {
+          alert("최저 온도와 최고 온도를 숫자로 입력해 주세요.");
+          return;
+        }
+
+        const minTemp = Number(minRaw);
+        const maxTemp = Number(maxRaw);
+
+        if (minTemp > maxTemp) {
+          alert("최저 온도는 최고 온도보다 작거나 같아야 합니다.\\n(예: 최저 -10℃ ~ 최고 -5.1℃)");
           return;
         }
 
@@ -682,7 +713,8 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               title: title,
-              threshold: Number(thresholdRaw),
+              minTemp: minTemp,
+              maxTemp: maxTemp,
               sound: sound
             })
           });
