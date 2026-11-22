@@ -67,14 +67,76 @@ function formatKmaParts(dateObj) {
   };
 }
 
+// 온도 구간 표시 포맷
+function formatTempRange(minTemp, maxTemp) {
+  return `${minTemp}℃ ~ ${maxTemp}℃`;
+}
+
+// 기존 단일 기준온도(threshold) 데이터 하위 호환 정규화
+function normalizeAlarm(a) {
+  if (typeof a.minTemp === "number" && typeof a.maxTemp === "number") {
+    return a;
+  }
+  const legacyMax = typeof a.threshold === "number" ? a.threshold : -5;
+  return {
+    ...a,
+    minTemp: Math.min(-40, legacyMax),
+    maxTemp: legacyMax
+  };
+}
+
+function normalizeActiveAlert(alertObj) {
+  if (!alertObj) return null;
+  if (typeof alertObj.minTemp === "number" && typeof alertObj.maxTemp === "number") {
+    return alertObj;
+  }
+  const legacyMax = typeof alertObj.threshold === "number" ? alertObj.threshold : -5;
+  return {
+    ...alertObj,
+    minTemp: Math.min(-40, legacyMax),
+    maxTemp: legacyMax
+  };
+}
+
+// 입력값(최저/최고 온도) 검증
+function parseTempRange(minRaw, maxRaw) {
+  if (minRaw === "" || minRaw === null || minRaw === undefined ||
+      maxRaw === "" || maxRaw === null || maxRaw === undefined) {
+    return { error: "최저 온도와 최고 온도를 모두 입력해 주세요." };
+  }
+
+  const minTemp = Number(minRaw);
+  const maxTemp = Number(maxRaw);
+
+  if (Number.isNaN(minTemp) || Number.isNaN(maxTemp)) {
+    return { error: "온도는 숫자로 입력해 주세요." };
+  }
+  if (minTemp < -40 || minTemp > 50 || maxTemp < -40 || maxTemp > 50) {
+    return { error: "온도는 -40℃ ~ 50℃ 범위 안에서 입력해 주세요." };
+  }
+  if (minTemp > maxTemp) {
+    return { error: "최저 온도는 최고 온도보다 작거나 같아야 합니다." };
+  }
+
+  return { minTemp, maxTemp };
+}
+
+// 기존 알람과 온도 구간 중복 여부 검사
+function findOverlappingAlarm(alarms, minTemp, maxTemp, excludeId = null) {
+  return alarms.find((a) => {
+    if (excludeId && a.id === excludeId) return false;
+    return minTemp <= a.maxTemp && maxTemp >= a.minTemp;
+  });
+}
+
 // KV 상태 불러오기
 async function loadState(env) {
   const raw = await env.ALARM_KV.get(KV_STATE_KEY, "json");
   if (!raw) return structuredClone(DEFAULT_STATE);
   return {
     masterEnabled: typeof raw.masterEnabled === "boolean" ? raw.masterEnabled : true,
-    alarms: Array.isArray(raw.alarms) ? raw.alarms : [],
-    activeAlert: raw.activeAlert || null,
+    alarms: Array.isArray(raw.alarms) ? raw.alarms.map(normalizeAlarm) : [],
+    activeAlert: normalizeActiveAlert(raw.activeAlert),
     lastCheck: raw.lastCheck || null,
     appOrigin: raw.appOrigin || ""
   };
@@ -282,13 +344,15 @@ async function sendBarkAlert(env, { alarm, temp, observedAt, origin, isTest = fa
     throw new Error("Cloudflare Secret에 BARK_KEY가 등록되지 않았습니다.");
   }
 
+  const rangeText = formatTempRange(alarm.minTemp, alarm.maxTemp);
+
   const title = isTest
     ? `🔔 [테스트] ${alarm.title}`
     : `🚨 ${alarm.title} (${LOCATION.shortName} ${temp}℃)`;
 
   const body = isTest
-    ? `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정기준: ${alarm.threshold}℃ 이하)\n기준시각: ${observedAt} · 터치하여 강조 화면을 확인하세요.`
-    : `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정기준: ${alarm.threshold}℃ 이하)\n기준시각: ${observedAt} · 터치하여 확인 및 순찰 로드맵 이동`;
+    ? `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정구간: ${rangeText})\n기준시각: ${observedAt} · 터치하여 강조 화면을 확인하세요.`
+    : `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정구간: ${rangeText})\n기준시각: ${observedAt} · 터치하여 확인 및 순찰 로드맵 이동`;
 
   const payload = {
     device_key: barkKey,
@@ -317,14 +381,20 @@ async function sendBarkAlert(env, { alarm, temp, observedAt, origin, isTest = fa
   }
 }
 
-// 조건에 걸린 알람 중 가장 낮은(심각한) 설정 온도 1개 선정
-function pickMostSevereAlarm(alarms, currentTemp) {
+// 현재 외기온도가 [최저온도 ~ 최고온도] 구간에 해당하는 알람 선정
+// (구간 중복을 방지하지만, 혹시 겹친 항목이 있으면 더 낮은 구간 1개 우선)
+function pickMatchedAlarm(alarms, currentTemp) {
   const matched = alarms.filter(
-    (a) => a.enabled && typeof a.threshold === "number" && currentTemp <= a.threshold
+    (a) =>
+      a.enabled &&
+      typeof a.minTemp === "number" &&
+      typeof a.maxTemp === "number" &&
+      currentTemp >= a.minTemp &&
+      currentTemp <= a.maxTemp
   );
   if (matched.length === 0) return null;
 
-  matched.sort((a, b) => a.threshold - b.threshold);
+  matched.sort((a, b) => a.minTemp - b.minTemp || a.maxTemp - b.maxTemp);
   return matched[0];
 }
 
@@ -358,15 +428,15 @@ export default {
       return;
     }
 
-    const severeAlarm = pickMostSevereAlarm(state.alarms, tempInfo.temp);
-    if (!severeAlarm) {
+    const matchedAlarm = pickMatchedAlarm(state.alarms, tempInfo.temp);
+    if (!matchedAlarm) {
       await saveState(env, state);
       return;
     }
 
     const origin = (env.APP_URL || state.appOrigin || "").replace(/\/$/, "");
     await sendBarkAlert(env, {
-      alarm: severeAlarm,
+      alarm: matchedAlarm,
       temp: tempInfo.temp,
       observedAt: tempInfo.observedAt,
       origin,
@@ -374,10 +444,11 @@ export default {
     });
 
     state.activeAlert = {
-      alarmId: severeAlarm.id,
-      title: severeAlarm.title,
-      threshold: severeAlarm.threshold,
-      sound: severeAlarm.sound || "alarm",
+      alarmId: matchedAlarm.id,
+      title: matchedAlarm.title,
+      minTemp: matchedAlarm.minTemp,
+      maxTemp: matchedAlarm.maxTemp,
+      sound: matchedAlarm.sound || "alarm",
       currentTemp: tempInfo.temp,
       observedAt: `${tempInfo.observedAt} · ${tempInfo.source}`,
       triggeredAt: formatKstDateTime(getKstDate()),
@@ -396,7 +467,6 @@ export default {
     try {
       // 1) 메인 웹 화면 렌더링
       if (pathname === "/" && method === "GET") {
-        // Cron이 링크 주소를 자동으로 알 수 있도록 최초 접속 origin 캐싱
         const state = await loadState(env);
         if (state.appOrigin !== url.origin) {
           state.appOrigin = url.origin;
@@ -442,7 +512,7 @@ export default {
         return jsonResponse({ ok: true, state });
       }
 
-      // 5) 알람 신규 추가 (최대 5개)
+      // 5) 알람 신규 추가 (최대 5개, 구간 중복 방지)
       if (pathname === "/api/alarms" && method === "POST") {
         const body = await request.json();
         const state = await loadState(env);
@@ -455,23 +525,32 @@ export default {
         }
 
         const title = String(body.title || "").trim();
-        const threshold = Number(body.threshold);
-        const sound = ALLOWED_SOUNDS.has(body.sound) ? body.sound : "alarm";
-
         if (!title) {
           return jsonResponse({ ok: false, error: "알람 타이틀을 입력해 주세요." }, 400);
         }
-        if (Number.isNaN(threshold) || threshold < -40 || threshold > 50) {
+
+        const parsed = parseTempRange(body.minTemp, body.maxTemp);
+        if (parsed.error) {
+          return jsonResponse({ ok: false, error: parsed.error }, 400);
+        }
+
+        const overlap = findOverlappingAlarm(state.alarms, parsed.minTemp, parsed.maxTemp);
+        if (overlap) {
           return jsonResponse(
-            { ok: false, error: "설정 온도는 -40℃ ~ 50℃ 사이의 숫자로 입력해 주세요." },
+            {
+              ok: false,
+              error: `기존 알람("${overlap.title}", ${formatTempRange(overlap.minTemp, overlap.maxTemp)})과 온도 구간이 겹칩니다. 겹치지 않게 입력해 주세요.`
+            },
             400
           );
         }
 
+        const sound = ALLOWED_SOUNDS.has(body.sound) ? body.sound : "alarm";
         const newAlarm = {
           id: `alm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           title,
-          threshold,
+          minTemp: parsed.minTemp,
+          maxTemp: parsed.maxTemp,
           sound,
           enabled: true,
           createdAt: formatKstDateTime(getKstDate())
@@ -503,13 +582,36 @@ export default {
             }
             target.title = title;
           }
-          if (body.threshold !== undefined) {
-            const threshold = Number(body.threshold);
-            if (Number.isNaN(threshold) || threshold < -40 || threshold > 50) {
-              return jsonResponse({ ok: false, error: "올바른 설정 온도를 입력해 주세요." }, 400);
+
+          if (body.minTemp !== undefined || body.maxTemp !== undefined) {
+            const nextMin = body.minTemp !== undefined ? body.minTemp : target.minTemp;
+            const nextMax = body.maxTemp !== undefined ? body.maxTemp : target.maxTemp;
+            const parsed = parseTempRange(nextMin, nextMax);
+            if (parsed.error) {
+              return jsonResponse({ ok: false, error: parsed.error }, 400);
             }
-            target.threshold = threshold;
+
+            const overlap = findOverlappingAlarm(
+              state.alarms,
+              parsed.minTemp,
+              parsed.maxTemp,
+              id
+            );
+            if (overlap) {
+              return jsonResponse(
+                {
+                  ok: false,
+                  error: `기존 알람("${overlap.title}", ${formatTempRange(overlap.minTemp, overlap.maxTemp)})과 온도 구간이 겹칩니다. 겹치지 않게 입력해 주세요.`
+                },
+                400
+              );
+            }
+
+            target.minTemp = parsed.minTemp;
+            target.maxTemp = parsed.maxTemp;
+            delete target.threshold;
           }
+
           if (body.sound !== undefined) {
             target.sound = ALLOWED_SOUNDS.has(body.sound) ? body.sound : "alarm";
           }
@@ -557,14 +659,17 @@ export default {
           }
         }
 
+        // 현재 온도에 맞는 알람이 있으면 우선 선택, 없으면 활성 알람 중 최저 구간 선택
+        const matchedNow = pickMatchedAlarm(state.alarms, tempInfo.temp);
         const enabledAlarms = state.alarms
           .filter((a) => a.enabled)
-          .sort((a, b) => a.threshold - b.threshold);
+          .sort((a, b) => a.minTemp - b.minTemp);
 
-        const sampleAlarm = enabledAlarms[0] || state.alarms[0] || {
+        const sampleAlarm = matchedNow || enabledAlarms[0] || state.alarms[0] || {
           id: "test_alarm",
           title: "동파 주의 테스트 알람",
-          threshold: -5,
+          minTemp: -10,
+          maxTemp: -5,
           sound: "alarm"
         };
 
@@ -581,7 +686,8 @@ export default {
         state.activeAlert = {
           alarmId: sampleAlarm.id,
           title: sampleAlarm.title,
-          threshold: sampleAlarm.threshold,
+          minTemp: sampleAlarm.minTemp,
+          maxTemp: sampleAlarm.maxTemp,
           sound: sampleAlarm.sound || "alarm",
           currentTemp: tempInfo.temp,
           observedAt: `${tempInfo.observedAt} · ${tempInfo.source}`,
