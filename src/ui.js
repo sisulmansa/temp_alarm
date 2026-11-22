@@ -344,12 +344,12 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 </div>
               </div>
               <div class="form-text" style="font-size: 12px;">
-                다른 알람과 구간이 겹치지 않도록 설정하세요. (예: -5 ~ 0℃ / -10 ~ -5.1℃)
+                다른 알람과 구간이 겹치지 않도록 설정하세요.
               </div>
               <div class="d-flex flex-wrap gap-2 mt-2">
                 <button type="button" class="btn btn-outline-secondary preset-chip" onclick="setPresetRange(-4.9, 0)">-4.9 ~ 0℃</button>
-                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-9.9, -5.0)">-9.9 ~ -5.0℃</button>
-                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-40, -10.0)">-40 ~ -10.0℃</button>
+                <button type="button" class="btn btn-outline-danger preset-chip" onclick="setPresetRange(-9.9, -5.0)">-9.9 ~ -5.0℃</button>
+                <button type="button" class="btn btn-outline-primary preset-chip" onclick="setPresetRange(-40, -10.0)">-40 ~ -10.0℃</button>
               </div>
             </div>
 
