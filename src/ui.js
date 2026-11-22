@@ -243,7 +243,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         <section class="temp-hero">
           <div class="d-flex justify-content-between align-items-start mb-2">
             <div>
-              <div class="small opacity-75">📍 ${locationName} 현재 외기온도</div>
+              <div class="small opacity-75">📍 ${locationName}</div>
               <div id="currentTemp" class="temp-value mt-1">--.-℃</div>
             </div>
             <span id="statusPill" class="badge rounded-pill bg-success bg-opacity-75 px-3 py-2" style="font-size: 12px;">
