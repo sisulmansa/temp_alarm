@@ -521,7 +521,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           card.classList.remove("paused");
           badge.className = "badge bg-success ms-1";
           badge.textContent = "작동 중";
-          desc.textContent = "21시 · 00시 · 03시 · 06시 정각에 설정 온도 구간 진입 시 긴급 알림";
+          desc.textContent = "21시 · 00시 · 03시 · 06시 정각에 긴급 알림";
           pill.className = "badge rounded-pill bg-success bg-opacity-75 px-3 py-2";
           pill.textContent = "자동 감시 ON";
         } else {
