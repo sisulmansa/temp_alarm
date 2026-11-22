@@ -331,7 +331,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <div class="col">
                   <div class="input-group">
                     <span class="input-group-text small fw-bold bg-light">최저</span>
-                    <input type="number" id="alarmMinTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" placeholder="-10" />
+                    <input type="number" id="alarmMinTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
                     <span class="input-group-text fw-bold">℃</span>
                   </div>
                 </div>
@@ -339,7 +339,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <div class="col">
                   <div class="input-group">
                     <span class="input-group-text small fw-bold bg-light">최고</span>
-                    <input type="number" id="alarmMaxTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" placeholder="-5.1" />
+                    <input type="number" id="alarmMaxTempInput" class="form-control fw-bold text-center" step="0.1" min="-40" max="50" />
                     <span class="input-group-text fw-bold">℃</span>
                   </div>
                 </div>
