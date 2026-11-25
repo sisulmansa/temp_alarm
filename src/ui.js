@@ -209,11 +209,9 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       <!-- 상단 네이비 헤더 -->
       <header class="header-bar text-white px-3 pb-3 sticky-top shadow-sm">
         <div class="d-flex justify-content-between align-items-center">
-          <div>
-            <h1 class="h5 fw-bold mb-0">🌡️ LG SciencePark</h1>
-            <a id="homeBtn" href="#" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1 fw-bold" style="font-size: 12px;">
+          <div><h1 class="h5 fw-bold mb-0">🌡️ LG SciencePark</h1></div>
+          <a id="homeBtn" href="#" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1 fw-bold" style="font-size: 12px;">
             설치가이드</a>
-          </div>
         </div>
       </header>
 
@@ -228,8 +226,8 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             <div id="alertTitle" class="active-alert-title mb-2"></div>
             <div id="alertDetail" class="small text-dark mb-3" style="line-height: 1.5;"></div>
             <div class="d-grid gap-2">
-              <a id="patrolBtn" href="${safePatrolUrl || "#"}" class="btn btn-danger fw-bold py-2 shadow-sm">
-                🌡️ 겨울철 새벽 온도순찰 로드맵 이동
+              <a id="patrolBtn" href="#" class="btn btn-danger fw-bold py-2 shadow-sm">
+                🌡️ 새벽 온도순찰 시작하세요.
               </a>
               <button type="button" class="btn btn-outline-dark fw-bold py-2 bg-white" onclick="ackAlert()">
                 ✅ 확인 완료 (강조 해제)
