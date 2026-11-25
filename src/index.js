@@ -1,7 +1,7 @@
 import { renderHtml } from "./ui.js";
 
 const LOCATION = {
-  name: "서울시 강서구 마곡동",
+  name: "서울특별시 강서구 마곡중앙10로 30",
   shortName: "마곡동",
   nx: 57,
   ny: 127,

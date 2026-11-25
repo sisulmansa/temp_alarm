@@ -212,9 +212,6 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           <div>
             <h1 class="h5 fw-bold mb-0">🌡️ LG 사이언스파크</h1>
           </div>
-          <a id="homeBtn" href="${safeHomeUrl}" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1 fw-bold" style="font-size: 12px;">
-            Home
-          </a>
         </div>
       </header>
 
@@ -669,7 +666,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           });
           appState = data.state;
           renderMaster();
-          showToast(enabled ? "전체 알람 감시를 켰습니다." : "휴무일 전체 알람을 일시정지했습니다.");
+          showToast(enabled ? "전체 알람 감시가 작동됩니다." : "전체 알람을 일시정지 했습니다.");
         } catch (err) {
           showToast("변경 실패: " + err.message);
           renderMaster();
