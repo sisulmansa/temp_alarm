@@ -210,7 +210,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       <header class="header-bar text-white px-3 pb-3 sticky-top shadow-sm">
         <div class="d-flex justify-content-between align-items-center">
           <div>
-            <h1 class="h5 fw-bold mb-0">🌡️ LG SciencePark 외기온도</h1>
+            <h1 class="h5 fw-bold mb-0">🌡️ LG SciencePark</h1>
             <a id="homeBtn" href="#" class="btn btn-outline-light btn-sm rounded-pill px-3 py-1 fw-bold" style="font-size: 12px;">
             설치가이드</a>
           </div>
