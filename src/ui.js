@@ -210,7 +210,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       <header class="header-bar text-white px-3 pb-3 sticky-top shadow-sm">
         <div class="d-flex justify-content-between align-items-center">
           <div>
-            <h1 class="h5 fw-bold mb-0">🌡️ LG 사이언스파크 외기온도 알람앱</h1>
+            <h1 class="h5 fw-bold mb-0">🌡️ 외기온도 알람앱</h1>
           </div>
         </div>
       </header>
