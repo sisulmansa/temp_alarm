@@ -10,7 +10,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
     <meta name="theme-color" content="#17324d" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <title>외기온도 알람 · ${locationName}</title>
+    <title>외기온도 알람앱</title>
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
 
@@ -210,7 +210,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
       <header class="header-bar text-white px-3 pb-3 sticky-top shadow-sm">
         <div class="d-flex justify-content-between align-items-center">
           <div>
-            <h1 class="h5 fw-bold mb-0">🌡️ LG 사이언스파크</h1>
+            <h1 class="h5 fw-bold mb-0">🌡️ LG 사이언스파크 외기온도 알람앱</h1>
           </div>
         </div>
       </header>
