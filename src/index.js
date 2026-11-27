@@ -11,6 +11,9 @@ const LOCATION = {
 
 const KV_STATE_KEY = "app_state";
 const MAX_ALARMS = 5;
+const TEMP_CACHE_TTL_MS = 3 * 60 * 1000; // 웹 1분 자동갱신용 기상청 3분 캐시
+const KMA_TIMEOUT_MS = 4500;
+const PUSH_TIMEOUT_MS = 6000;
 
 const ALLOWED_SOUNDS = new Set([
   "alarm",
@@ -39,7 +42,10 @@ const DEFAULT_STATE = {
   appOrigin: ""
 };
 
-// 한국시간(KST) Date 객체 생성 (UTC 메서드로 KST 각 필드 안전하게 참조)
+// ============================================================================
+// 공통 유틸리티
+// ============================================================================
+
 function getKstDate(offsetMinutes = 0) {
   return new Date(Date.now() + (9 * 60 + offsetMinutes) * 60 * 1000);
 }
@@ -67,12 +73,53 @@ function formatKmaParts(dateObj) {
   };
 }
 
-// 온도 구간 표시 포맷
 function formatTempRange(minTemp, maxTemp) {
   return `${minTemp}℃ ~ ${maxTemp}℃`;
 }
 
-// 기존 단일 기준온도(threshold) 데이터 하위 호환 정규화
+function parseCsvList(rawValue) {
+  return String(rawValue || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+function maskSecret(val) {
+  if (!val) return "(empty)";
+  if (val.length <= 4) return `****(len:${val.length})`;
+  return `${val.slice(0, 3)}***${val.slice(-2)}(len:${val.length})`;
+}
+
+// 타임아웃이 보장되는 안전한 fetch 래퍼
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`응답 시간 초과 (${timeoutMs}ms)`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
+    }
+  });
+}
+
+// ============================================================================
+// 상태(KV) 관리 및 알람 데이터 검증
+// ============================================================================
+
 function normalizeAlarm(a) {
   if (typeof a.minTemp === "number" && typeof a.maxTemp === "number") {
     return a;
@@ -98,7 +145,6 @@ function normalizeActiveAlert(alertObj) {
   };
 }
 
-// 입력값(최저/최고 온도) 검증
 function parseTempRange(minRaw, maxRaw) {
   if (
     minRaw === "" || minRaw === null || minRaw === undefined ||
@@ -123,7 +169,6 @@ function parseTempRange(minRaw, maxRaw) {
   return { minTemp, maxTemp };
 }
 
-// 기존 알람과 온도 구간 중복 여부 검사
 function findOverlappingAlarm(alarms, minTemp, maxTemp, excludeId = null) {
   return alarms.find((a) => {
     if (excludeId && a.id === excludeId) return false;
@@ -131,7 +176,21 @@ function findOverlappingAlarm(alarms, minTemp, maxTemp, excludeId = null) {
   });
 }
 
-// KV 상태 불러오기
+function pickMatchedAlarm(alarms, currentTemp) {
+  const matched = alarms.filter(
+    (a) =>
+      a.enabled &&
+      typeof a.minTemp === "number" &&
+      typeof a.maxTemp === "number" &&
+      currentTemp >= a.minTemp &&
+      currentTemp <= a.maxTemp
+  );
+  if (matched.length === 0) return null;
+
+  matched.sort((a, b) => a.minTemp - b.minTemp || a.maxTemp - b.maxTemp);
+  return matched[0];
+}
+
 async function loadState(env) {
   const raw = await env.ALARM_KV.get(KV_STATE_KEY, "json");
   if (!raw) return structuredClone(DEFAULT_STATE);
@@ -144,14 +203,38 @@ async function loadState(env) {
   };
 }
 
-// KV 상태 저장
 async function saveState(env, state) {
   await env.ALARM_KV.put(KV_STATE_KEY, JSON.stringify(state));
 }
 
-// 1순위: 기상청 API허브 초단기실황 JSON (정각 우선 -> 없으면 직전 시각 자동 조회)
+// ============================================================================
+// 기상청 API허브 외기온도 조회 (타임아웃 + 자동 폴백)
+// ============================================================================
+
+function parseDfsGridTemp(text) {
+  const cleaned = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .join(" ");
+
+  const tokens = cleaned.split(/[\s,]+/).filter(Boolean);
+  const totalNeeded = LOCATION.gridCols * LOCATION.gridRows; // 37,697
+  if (tokens.length < totalNeeded) {
+    throw new Error(`격자 데이터 개수 부족 (${tokens.length})`);
+  }
+
+  const idx = (LOCATION.ny - 1) * LOCATION.gridCols + (LOCATION.nx - 1);
+  const val = parseFloat(tokens[idx]);
+  if (Number.isNaN(val) || val <= -90) {
+    throw new Error(`결측 격자값 (${tokens[idx]})`);
+  }
+  return val;
+}
+
+// 1순위: 초단기실황 JSON
 async function fetchFromTyp02Json(authKey) {
-  const offsets = [0, -60, -120];
+  const offsets = [0, -60];
   let lastError = "";
 
   for (const offsetMin of offsets) {
@@ -163,7 +246,7 @@ async function fetchFromTyp02Json(authKey) {
       `&nx=${LOCATION.nx}&ny=${LOCATION.ny}` +
       `&authKey=${encodeURIComponent(authKey)}`;
 
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, 3500);
     if (!res.ok) {
       lastError = `typ02 HTTP ${res.status}`;
       if (res.status === 401 || res.status === 403 || res.status === 404) {
@@ -202,31 +285,9 @@ async function fetchFromTyp02Json(authKey) {
   throw new Error(lastError || "초단기실황 조회 실패");
 }
 
-// 격자 텍스트 응답에서 마곡동(nx=57, ny=127) 온도 추출
-function parseDfsGridTemp(text) {
-  const cleaned = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("#"))
-    .join(" ");
-
-  const tokens = cleaned.split(/[\s,]+/).filter(Boolean);
-  const totalNeeded = LOCATION.gridCols * LOCATION.gridRows; // 37,697
-  if (tokens.length < totalNeeded) {
-    throw new Error(`격자 데이터 개수 부족 (${tokens.length})`);
-  }
-
-  const idx = (LOCATION.ny - 1) * LOCATION.gridCols + (LOCATION.nx - 1);
-  const val = parseFloat(tokens[idx]);
-  if (Number.isNaN(val) || val <= -90) {
-    throw new Error(`결측 격자값 (${tokens[idx]})`);
-  }
-  return val;
-}
-
-// 2순위: 기상청 API허브 초단기실황 격자(typ01 nph-dfs_odam_grd)
+// 2순위: 초단기실황 격자
 async function fetchFromTyp01OdamGrid(authKey) {
-  const offsets = [0, -60, -120];
+  const offsets = [0, -60];
   let lastError = "";
 
   for (const offsetMin of offsets) {
@@ -235,9 +296,12 @@ async function fetchFromTyp01OdamGrid(authKey) {
       `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-dfs_odam_grd` +
       `?tmfc=${parts.ymdh}&vars=T1H&authKey=${encodeURIComponent(authKey)}`;
 
-    const res = await fetch(url);
+    const res = await fetchWithTimeout(url, {}, KMA_TIMEOUT_MS);
     if (!res.ok) {
       lastError = `odam_grd HTTP ${res.status}`;
+      if (res.status === 401 || res.status === 403 || res.status === 404) {
+        throw new Error(lastError);
+      }
       continue;
     }
 
@@ -257,9 +321,8 @@ async function fetchFromTyp01OdamGrid(authKey) {
   throw new Error(lastError || "초단기실황 격자 조회 실패");
 }
 
-// 3순위: 기상청 API허브 단기예보 격자(typ01 nph-dfs_shrt_grd)
+// 3순위: 단기예보 격자
 function getLatestShrtTmfc() {
-  // 단기예보 발표시각: 02, 05, 08, 11, 14, 17, 20, 23시 KST (15분 여유 반영)
   const ref = getKstDate(-15);
   const hour = ref.getUTCHours();
   const baseHours = [2, 5, 8, 11, 14, 17, 20, 23];
@@ -285,38 +348,25 @@ function getLatestShrtTmfc() {
 
 async function fetchFromTyp01ShrtGrid(authKey) {
   const tmfc = getLatestShrtTmfc();
-  const offsets = [0, 60];
-  let lastError = "";
+  const parts = formatKmaParts(getKstDate(0));
+  const url =
+    `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-dfs_shrt_grd` +
+    `?tmfc=${tmfc}&tmef=${parts.ymdh}&vars=TMP&authKey=${encodeURIComponent(authKey)}`;
 
-  for (const offsetMin of offsets) {
-    const parts = formatKmaParts(getKstDate(offsetMin));
-    const url =
-      `https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-dfs_shrt_grd` +
-      `?tmfc=${tmfc}&tmef=${parts.ymdh}&vars=TMP&authKey=${encodeURIComponent(authKey)}`;
-
-    const res = await fetch(url);
-    if (!res.ok) {
-      lastError = `shrt_grd HTTP ${res.status}`;
-      continue;
-    }
-
-    const text = await res.text();
-    try {
-      const temp = parseDfsGridTemp(text);
-      return {
-        temp,
-        observedAt: parts.label,
-        source: "단기예보 격자(API허브)"
-      };
-    } catch (err) {
-      lastError = err.message;
-    }
+  const res = await fetchWithTimeout(url, {}, KMA_TIMEOUT_MS);
+  if (!res.ok) {
+    throw new Error(`shrt_grd HTTP ${res.status}`);
   }
 
-  throw new Error(lastError || "단기예보 격자 조회 실패");
+  const text = await res.text();
+  const temp = parseDfsGridTemp(text);
+  return {
+    temp,
+    observedAt: parts.label,
+    source: "단기예보 격자(API허브)"
+  };
 }
 
-// 통합 기온 조회 함수 (초단기실황 JSON -> 초단기실황 격자 -> 단기예보 격자 자동 폴백)
 async function fetchMagokTemp(env) {
   const authKey = (env.KMA_API_KEY || "").trim();
   if (!authKey) {
@@ -329,7 +379,8 @@ async function fetchMagokTemp(env) {
       const result = await fn(authKey);
       return {
         ...result,
-        checkedAt: formatKstDateTime(getKstDate())
+        checkedAt: formatKstDateTime(getKstDate()),
+        fetchedAtMs: Date.now()
       };
     } catch (err) {
       errors.push(err.message);
@@ -339,16 +390,12 @@ async function fetchMagokTemp(env) {
   throw new Error(`기상청 데이터 조회 실패 (${errors.join(" / ")})`);
 }
 
-// 쉼표(,)로 구분된 다중 키/토픽 파싱
-function parseCsvList(rawValue) {
-  return String(rawValue || "")
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean);
-}
+// ============================================================================
+// 긴급 알림 발송 (아이폰 Bark + 안드로이드 ntfy)
+// ============================================================================
 
-// Bark 단일 기기 발송 (아이폰 무음·수면 돌파 + 30초 벨소리)
 async function pushToBark(deviceKey, { title, body, sound, clickUrl }) {
+  const startedAt = Date.now();
   const payload = {
     device_key: deviceKey,
     title,
@@ -364,23 +411,42 @@ async function pushToBark(deviceKey, { title, body, sound, clickUrl }) {
     payload.url = clickUrl;
   }
 
-  const res = await fetch("https://api.day.app/push", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
+  const res = await fetchWithTimeout(
+    "https://api.day.app/push",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=utf-8" },
+      body: JSON.stringify(payload)
+    },
+    PUSH_TIMEOUT_MS
+  );
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Bark 발송 실패 (HTTP ${res.status}): ${errText}`);
+  const resText = await res.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(resText);
+  } catch {
+    // JSON이 아닌 응답은 HTTP 상태로만 판정
   }
+
+  if (!res.ok || (parsed && parsed.code !== undefined && parsed.code !== 200)) {
+    throw new Error(`Bark 발송 실패 (HTTP ${res.status}): ${parsed?.message || resText}`);
+  }
+
+  return {
+    channel: "bark",
+    target: maskSecret(deviceKey),
+    ok: true,
+    ms: Date.now() - startedAt
+  };
 }
 
-// ntfy 단일 토픽 발송 (안드로이드 최고 우선순위 긴급 알림)
 async function pushToNtfy(rawTopic, { title, body, clickUrl }) {
+  const startedAt = Date.now();
   const topic = rawTopic
     .replace(/^https?:\/\/ntfy\.sh\//i, "")
-    .replace(/^\/+|\/+$/g, "");
+    .replace(/^\/+|\/+$/g, "")
+    .trim();
 
   if (!topic) {
     throw new Error("ntfy 토픽 이름이 비어 있습니다.");
@@ -397,19 +463,32 @@ async function pushToNtfy(rawTopic, { title, body, clickUrl }) {
     payload.click = clickUrl;
   }
 
-  const res = await fetch("https://ntfy.sh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
+  const res = await fetchWithTimeout(
+    "https://ntfy.sh",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "magok-temp-alarm/2.0"
+      },
+      body: JSON.stringify(payload)
+    },
+    PUSH_TIMEOUT_MS
+  );
 
+  const resText = await res.text();
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`ntfy 발송 실패 (HTTP ${res.status}): ${errText}`);
+    throw new Error(`ntfy 발송 실패 (HTTP ${res.status}): ${resText}`);
   }
+
+  return {
+    channel: "ntfy",
+    target: maskSecret(topic),
+    ok: true,
+    ms: Date.now() - startedAt
+  };
 }
 
-// 통합 긴급 알림 발송 (아이폰 Bark + 안드로이드 ntfy 동시 지원)
 async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false }) {
   const barkKeys = parseCsvList(env.BARK_KEY);
   const ntfyTopics = parseCsvList(env.NTFY_TOPIC);
@@ -432,55 +511,54 @@ async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false
 
   const tasks = [
     ...barkKeys.map((key) =>
-      pushToBark(key, { title, body, sound: alarm.sound, clickUrl })
+      pushToBark(key, { title, body, sound: alarm.sound, clickUrl }).catch((err) => ({
+        channel: "bark",
+        target: maskSecret(key),
+        ok: false,
+        error: err.message
+      }))
     ),
     ...ntfyTopics.map((topic) =>
-      pushToNtfy(topic, { title, body, clickUrl })
+      pushToNtfy(topic, { title, body, clickUrl }).catch((err) => ({
+        channel: "ntfy",
+        target: maskSecret(topic),
+        ok: false,
+        error: err.message
+      }))
     )
   ];
 
-  const results = await Promise.allSettled(tasks);
-  const succeeded = results.filter((r) => r.status === "fulfilled").length;
-  const failed = results.filter((r) => r.status === "rejected");
+  const results = await Promise.all(tasks);
+  const succeeded = results.filter((r) => r.ok);
+  const failed = results.filter((r) => !r.ok);
 
-  if (failed.length > 0) {
-    console.error(
-      "일부 알림 발송 실패:",
-      failed.map((f) => f.reason?.message || String(f.reason)).join(" / ")
-    );
-  }
-
-  if (succeeded === 0) {
-    const firstErr = failed[0]?.reason?.message || "알 수 없는 오류";
-    throw new Error(firstErr);
-  }
-}
-
-// 현재 외기온도가 [최저온도 ~ 최고온도] 구간에 해당하는 알람 선정
-function pickMatchedAlarm(alarms, currentTemp) {
-  const matched = alarms.filter(
-    (a) =>
-      a.enabled &&
-      typeof a.minTemp === "number" &&
-      typeof a.maxTemp === "number" &&
-      currentTemp >= a.minTemp &&
-      currentTemp <= a.maxTemp
+  // Cloudflare Real-time logs에서 발송 상태를 즉시 판별할 수 있도록 기록
+  console.log(
+    "[ALERT_DELIVERY]",
+    JSON.stringify({
+      isTest,
+      barkConfigured: barkKeys.length,
+      ntfyConfigured: ntfyTopics.length,
+      results
+    })
   );
-  if (matched.length === 0) return null;
 
-  matched.sort((a, b) => a.minTemp - b.minTemp || a.maxTemp - b.maxTemp);
-  return matched[0];
+  if (succeeded.length === 0) {
+    throw new Error(failed.map((f) => f.error).join(" / ") || "알림 발송 실패");
+  }
+
+  return {
+    barkConfigured: barkKeys.length,
+    ntfyConfigured: ntfyTopics.length,
+    succeeded: succeeded.length,
+    failed: failed.length,
+    results
+  };
 }
 
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store"
-    }
-  });
-}
+// ============================================================================
+// Cloudflare Workers 엔트리포인트
+// ============================================================================
 
 export default {
   // Cron 정각 자동 실행 (KST 21:00, 00:00, 03:00, 06:00)
@@ -492,11 +570,10 @@ export default {
       tempInfo = await fetchMagokTemp(env);
       state.lastCheck = tempInfo;
     } catch (err) {
-      console.error("Cron 기온 조회 실패:", err.message);
+      console.error("[CRON] 기온 조회 실패:", err.message);
       return;
     }
 
-    // 휴무일 전체 일시정지 상태이면 기온 기록만 갱신하고 발송 중단
     if (!state.masterEnabled) {
       await saveState(env, state);
       return;
@@ -509,30 +586,34 @@ export default {
     }
 
     const origin = (env.APP_URL || state.appOrigin || "").replace(/\/$/, "");
-    await sendAlerts(env, {
-      alarm: matchedAlarm,
-      temp: tempInfo.temp,
-      observedAt: tempInfo.observedAt,
-      origin,
-      isTest: false
-    });
+    try {
+      await sendAlerts(env, {
+        alarm: matchedAlarm,
+        temp: tempInfo.temp,
+        observedAt: tempInfo.observedAt,
+        origin,
+        isTest: false
+      });
 
-    state.activeAlert = {
-      alarmId: matchedAlarm.id,
-      title: matchedAlarm.title,
-      minTemp: matchedAlarm.minTemp,
-      maxTemp: matchedAlarm.maxTemp,
-      sound: matchedAlarm.sound || "alarm",
-      currentTemp: tempInfo.temp,
-      observedAt: `${tempInfo.observedAt} · ${tempInfo.source}`,
-      triggeredAt: formatKstDateTime(getKstDate()),
-      isTest: false
-    };
+      state.activeAlert = {
+        alarmId: matchedAlarm.id,
+        title: matchedAlarm.title,
+        minTemp: matchedAlarm.minTemp,
+        maxTemp: matchedAlarm.maxTemp,
+        sound: matchedAlarm.sound || "alarm",
+        currentTemp: tempInfo.temp,
+        observedAt: `${tempInfo.observedAt} · ${tempInfo.source}`,
+        triggeredAt: formatKstDateTime(getKstDate()),
+        isTest: false
+      };
+    } catch (err) {
+      console.error("[CRON] 알림 발송 실패:", err.message);
+    }
 
     await saveState(env, state);
   },
 
-  // 웹 UI 및 API 요청 처리
+  // 웹 UI 및 REST API 처리
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
@@ -567,16 +648,34 @@ export default {
         return jsonResponse({ ok: true, state });
       }
 
-      // 3) 마곡동 외기온도 새로고침 (1분 자동갱신 대응: 기온·관측시각 변동 시에만 KV 저장)
+      // 3) 외기온도 조회 (3분 이내 재요청은 캐시로 즉시 응답 -> 기상청 지연·부하 방지)
       if (pathname === "/api/temp" && method === "GET") {
         const state = await loadState(env);
-        const tempInfo = await fetchMagokTemp(env);
-
         const prev = state.lastCheck;
+        const isCacheFresh =
+          prev &&
+          typeof prev.temp === "number" &&
+          typeof prev.fetchedAtMs === "number" &&
+          Date.now() - prev.fetchedAtMs < TEMP_CACHE_TTL_MS;
+
+        if (isCacheFresh) {
+          return jsonResponse({
+            ok: true,
+            lastCheck: {
+              ...prev,
+              checkedAt: formatKstDateTime(getKstDate())
+            },
+            activeAlert: state.activeAlert
+          });
+        }
+
+        const tempInfo = await fetchMagokTemp(env);
         const shouldSaveKv =
           !prev ||
           prev.temp !== tempInfo.temp ||
           prev.observedAt !== tempInfo.observedAt ||
+          !prev.fetchedAtMs ||
+          Date.now() - prev.fetchedAtMs >= TEMP_CACHE_TTL_MS ||
           state.appOrigin !== url.origin;
 
         state.lastCheck = tempInfo;
@@ -651,7 +750,7 @@ export default {
         return jsonResponse({ ok: true, alarm: newAlarm, state });
       }
 
-      // 6) 개별 알람 수정 / 활성·비활성 토글 / 삭제
+      // 6) 개별 알람 수정 / 토글 / 삭제
       if (pathname.startsWith("/api/alarms/")) {
         const id = decodeURIComponent(pathname.slice("/api/alarms/".length));
         const state = await loadState(env);
@@ -731,16 +830,16 @@ export default {
         return jsonResponse({ ok: true, state });
       }
 
-      // 8) 수동 테스트 알림 발송 (Bark + ntfy 긴급 알림 + 강조 카드 동작 동시 검증)
+      // 8) 수동 테스트 알림 발송 (저장된 기온 즉시 사용 -> 1초 내 완료)
       if (pathname === "/api/test" && method === "POST") {
         const state = await loadState(env);
         let tempInfo = state.lastCheck;
 
-        try {
-          tempInfo = await fetchMagokTemp(env);
-          state.lastCheck = tempInfo;
-        } catch (err) {
-          if (!tempInfo) {
+        if (!tempInfo || typeof tempInfo.temp !== "number") {
+          try {
+            tempInfo = await fetchMagokTemp(env);
+            state.lastCheck = tempInfo;
+          } catch {
             tempInfo = {
               temp: -5.0,
               observedAt: formatKstDateTime(getKstDate()).slice(0, 16),
@@ -764,7 +863,7 @@ export default {
 
         state.appOrigin = url.origin;
 
-        await sendAlerts(env, {
+        const delivery = await sendAlerts(env, {
           alarm: sampleAlarm,
           temp: tempInfo.temp,
           observedAt: tempInfo.observedAt,
@@ -785,7 +884,7 @@ export default {
         };
 
         await saveState(env, state);
-        return jsonResponse({ ok: true, state });
+        return jsonResponse({ ok: true, state, delivery });
       }
 
       return jsonResponse({ ok: false, error: "Not Found" }, 404);
