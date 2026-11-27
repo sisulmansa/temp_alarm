@@ -339,11 +339,83 @@ async function fetchMagokTemp(env) {
   throw new Error(`기상청 데이터 조회 실패 (${errors.join(" / ")})`);
 }
 
-// Bark 아이폰 긴급 알림 발송 (무음·수면 돌파 + 30초 벨소리)
-async function sendBarkAlert(env, { alarm, temp, observedAt, origin, isTest = false }) {
-  const barkKey = (env.BARK_KEY || "").trim();
-  if (!barkKey) {
-    throw new Error("Cloudflare Secret에 BARK_KEY가 등록되지 않았습니다.");
+// 쉼표(,)로 구분된 다중 키/토픽 파싱
+function parseCsvList(rawValue) {
+  return String(rawValue || "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+// Bark 단일 기기 발송 (아이폰 무음·수면 돌파 + 30초 벨소리)
+async function pushToBark(deviceKey, { title, body, sound, clickUrl }) {
+  const payload = {
+    device_key: deviceKey,
+    title,
+    body,
+    level: "critical",
+    volume: 10,
+    call: "1",
+    sound: ALLOWED_SOUNDS.has(sound) ? sound : "alarm",
+    group: "magok-temp-alarm"
+  };
+
+  if (clickUrl) {
+    payload.url = clickUrl;
+  }
+
+  const res = await fetch("https://api.day.app/push", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Bark 발송 실패 (HTTP ${res.status}): ${errText}`);
+  }
+}
+
+// ntfy 단일 토픽 발송 (안드로이드 최고 우선순위 긴급 알림)
+async function pushToNtfy(rawTopic, { title, body, clickUrl }) {
+  const topic = rawTopic
+    .replace(/^https?:\/\/ntfy\.sh\//i, "")
+    .replace(/^\/+|\/+$/g, "");
+
+  if (!topic) {
+    throw new Error("ntfy 토픽 이름이 비어 있습니다.");
+  }
+
+  const payload = {
+    topic,
+    title,
+    message: body,
+    priority: 5
+  };
+
+  if (clickUrl) {
+    payload.click = clickUrl;
+  }
+
+  const res = await fetch("https://ntfy.sh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify(payload)
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`ntfy 발송 실패 (HTTP ${res.status}): ${errText}`);
+  }
+}
+
+// 통합 긴급 알림 발송 (아이폰 Bark + 안드로이드 ntfy 동시 지원)
+async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false }) {
+  const barkKeys = parseCsvList(env.BARK_KEY);
+  const ntfyTopics = parseCsvList(env.NTFY_TOPIC);
+
+  if (barkKeys.length === 0 && ntfyTopics.length === 0) {
+    throw new Error("Cloudflare Secret에 BARK_KEY 또는 NTFY_TOPIC이 등록되지 않았습니다.");
   }
 
   const rangeText = formatTempRange(alarm.minTemp, alarm.maxTemp);
@@ -356,30 +428,31 @@ async function sendBarkAlert(env, { alarm, temp, observedAt, origin, isTest = fa
     ? `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정구간: ${rangeText})\n기준시각: ${observedAt} · 터치하여 강조 화면을 확인하세요.`
     : `현재 ${LOCATION.shortName} 외기온도 ${temp}℃ (설정구간: ${rangeText})\n기준시각: ${observedAt} · 터치하여 확인 및 순찰 로드맵 이동`;
 
-  const payload = {
-    device_key: barkKey,
-    title,
-    body,
-    level: "critical",
-    volume: 10,
-    call: "1",
-    sound: ALLOWED_SOUNDS.has(alarm.sound) ? alarm.sound : "alarm",
-    group: "magok-temp-alarm"
-  };
+  const clickUrl = origin ? `${origin}/?alert=${encodeURIComponent(alarm.id)}` : "";
 
-  if (origin) {
-    payload.url = `${origin}/?alert=${encodeURIComponent(alarm.id)}`;
+  const tasks = [
+    ...barkKeys.map((key) =>
+      pushToBark(key, { title, body, sound: alarm.sound, clickUrl })
+    ),
+    ...ntfyTopics.map((topic) =>
+      pushToNtfy(topic, { title, body, clickUrl })
+    )
+  ];
+
+  const results = await Promise.allSettled(tasks);
+  const succeeded = results.filter((r) => r.status === "fulfilled").length;
+  const failed = results.filter((r) => r.status === "rejected");
+
+  if (failed.length > 0) {
+    console.error(
+      "일부 알림 발송 실패:",
+      failed.map((f) => f.reason?.message || String(f.reason)).join(" / ")
+    );
   }
 
-  const res = await fetch("https://api.day.app/push", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Bark 발송 실패 (HTTP ${res.status}): ${errText}`);
+  if (succeeded === 0) {
+    const firstErr = failed[0]?.reason?.message || "알 수 없는 오류";
+    throw new Error(firstErr);
   }
 }
 
@@ -436,7 +509,7 @@ export default {
     }
 
     const origin = (env.APP_URL || state.appOrigin || "").replace(/\/$/, "");
-    await sendBarkAlert(env, {
+    await sendAlerts(env, {
       alarm: matchedAlarm,
       temp: tempInfo.temp,
       observedAt: tempInfo.observedAt,
@@ -658,7 +731,7 @@ export default {
         return jsonResponse({ ok: true, state });
       }
 
-      // 8) 수동 테스트 알림 발송 (Bark 긴급 알림 + 강조 카드 동작 동시 검증)
+      // 8) 수동 테스트 알림 발송 (Bark + ntfy 긴급 알림 + 강조 카드 동작 동시 검증)
       if (pathname === "/api/test" && method === "POST") {
         const state = await loadState(env);
         let tempInfo = state.lastCheck;
@@ -691,7 +764,7 @@ export default {
 
         state.appOrigin = url.origin;
 
-        await sendBarkAlert(env, {
+        await sendAlerts(env, {
           alarm: sampleAlarm,
           temp: tempInfo.temp,
           observedAt: tempInfo.observedAt,
