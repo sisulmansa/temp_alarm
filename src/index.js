@@ -631,7 +631,8 @@ export default {
         const html = renderHtml({
           locationName: LOCATION.name,
           homeUrl: env.HOME_URL || "",
-          patrolUrl: env.PATROL_URL || ""
+          // patrolUrl: env.PATROL_URL || ""
+          patrolUrl: ""
         });
 
         return new Response(html, {
