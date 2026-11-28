@@ -96,6 +96,51 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         background-color: #f8f9fa;
       }
 
+      /* 수신자별 알림 및 진동·음량 카드 */
+      .user-item-box {
+        border: 1px solid #e9ecef;
+        border-radius: 12px;
+        padding: 12px 14px;
+        background-color: #fafbfc;
+        transition: opacity 0.2s, background-color 0.2s;
+      }
+      .user-item-box.user-off {
+        opacity: 0.62;
+        background-color: #f4f6f8;
+      }
+      .mode-btn-group {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin-top: 10px;
+      }
+      .mode-btn {
+        border: 1px solid #d0d7de;
+        background-color: #ffffff;
+        color: #495057;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 4px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+      .mode-btn.active {
+        background-color: #17324d;
+        border-color: #17324d;
+        color: #ffffff;
+      }
+      .mode-btn.active.mode-vibrate {
+        background-color: #0d6efd;
+        border-color: #0d6efd;
+        color: #ffffff;
+      }
+      .mode-btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
+
       /* 개별 알람 카드 */
       .alarm-card {
         background: #ffffff;
@@ -283,7 +328,25 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
           </div>
         </section>
 
-        <!-- 4. 알람 목록 헤더 & + 추가 버튼 -->
+        <!-- 4. 수신자별 알림 ON/OFF 및 진동·음량 설정 카드 -->
+        <section class="panel-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div>
+              <div class="fw-bold" style="font-size: 15px; color: #17324d;">
+                👥 수신자별 알림 · 진동/음량 설정
+              </div>
+              <div class="text-muted" style="font-size: 12px;">
+                당직자만 ON으로 켜고, 공동 수면 시 <b>진동만</b> 또는 <b>작게</b>를 선택하세요.
+              </div>
+            </div>
+            <span id="activeUserBadge" class="badge bg-primary rounded-pill px-2 py-1" style="font-size: 11px;">
+              0명 수신
+            </span>
+          </div>
+          <div id="userList" class="d-flex flex-column gap-2 mt-2"></div>
+        </section>
+
+        <!-- 5. 알람 목록 헤더 & + 추가 버튼 -->
         <div class="d-flex justify-content-between align-items-center mb-2 mt-3 px-1">
           <h2 class="h6 fw-bold mb-0" style="color: #17324d;">
             ⏰ 설정된 온도 구간 알람 (<span id="alarmCount">0</span> / 5)
@@ -299,7 +362,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         <!-- 안내 푸터 -->
         <div class="text-center text-muted mt-4" style="font-size: 12px; line-height: 1.6;">
           • 알람별로 <b>최저 ~ 최고 온도 구간</b>을 설정해 중복 없이 감시<br />
-          • 아이폰 Bark 긴급 알림(무음·수면 돌파 / 30초 연속 벨소리)<br />
+          • 아이폰 Bark 긴급 알림(무음·수면 돌파 / 진동 전용 및 음량 조절 지원)<br />
           <p style="margin-top:8px">&copy; Designed by AnSangHyun 2026</p>
         </div>
       </main>
@@ -371,7 +434,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
                 <option value="multiwayinvitation">초대음 (Multiway Invitation)</option>
               </select>
               <div class="form-text" style="font-size: 12px;">
-                기본 알람벨(Alarm)이 기본값이며, Bark 앱 내장 벨소리 중 선택 가능
+                수신자 설정이 '진동만'일 때는 벨소리 대신 진동만 작동합니다.
               </div>
             </div>
           </div>
@@ -410,13 +473,21 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         gotosleep: "취침음",
         multiwayinvitation: "초대음"
       };
+      const MODE_OPTIONS = [
+        { value: "vibrate", label: "📳 진동만" },
+        { value: "low", label: "🔈 작게" },
+        { value: "medium", label: "🔉 보통" },
+        { value: "high", label: "🔊 크게" }
+      ];
 
       let appState = {
         masterEnabled: true,
         alarms: [],
         activeAlert: null,
-        lastCheck: null
+        lastCheck: null,
+        userSettings: {}
       };
+      let userList = [];
       let alarmModal = null;
       let toastTimer = null;
       let autoRefreshTimer = null;
@@ -531,6 +602,77 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         }
       }
 
+      function renderUsers() {
+        const listEl = document.getElementById("userList");
+        const badgeEl = document.getElementById("activeUserBadge");
+        const users = Array.isArray(userList) ? userList : [];
+        const activeCount = users.filter(function (u) {
+          return u.enabled;
+        }).length;
+
+        badgeEl.className =
+          activeCount > 0
+            ? "badge bg-primary rounded-pill px-2 py-1"
+            : "badge bg-secondary rounded-pill px-2 py-1";
+        badgeEl.textContent = activeCount + " / " + users.length + "명 수신";
+
+        if (users.length === 0) {
+          listEl.innerHTML =
+            "<div class='text-center text-muted small py-3 bg-light rounded-3'>" +
+            "등록된 수신자가 없습니다.<br><code>src/users.js</code> 파일에 근무자 키를 입력해 주세요." +
+            "</div>";
+          return;
+        }
+
+        let html = "";
+        users.forEach(function (user) {
+          const icon = user.platform === "android" ? "🤖" : "📱";
+          const platformLabel = user.platform === "android" ? "Android" : "iPhone";
+          const statusBadge = user.enabled
+            ? "<span class='badge bg-success ms-1' style='font-size: 10.5px;'>수신 ON</span>"
+            : "<span class='badge bg-secondary ms-1' style='font-size: 10.5px;'>휴무 OFF</span>";
+
+          let modeButtonsHtml = "";
+          MODE_OPTIONS.forEach(function (opt) {
+            const isActive = user.mode === opt.value;
+            const activeClass = isActive
+              ? " active" + (opt.value === "vibrate" ? " mode-vibrate" : "")
+              : "";
+            modeButtonsHtml +=
+              "<button type='button' class='mode-btn" + activeClass + "' " +
+              "data-user-id='" + escapeHtml(user.id) + "' " +
+              "data-mode='" + opt.value + "' " +
+              (user.enabled ? "" : "disabled ") +
+              "onclick='handleUserModeClick(this)'>" +
+              opt.label +
+              "</button>";
+          });
+
+          html +=
+            "<div class='user-item-box" + (user.enabled ? "" : " user-off") + "'>" +
+            "  <div class='d-flex justify-content-between align-items-center'>" +
+            "    <div>" +
+            "      <div class='fw-bold' style='font-size: 14px; color: #17324d;'>" +
+            "        " + icon + " " + escapeHtml(user.name) + statusBadge +
+            "      </div>" +
+            "      <div class='text-muted' style='font-size: 11px;'>" +
+            "        " + platformLabel + " · 키: " + escapeHtml(user.maskedKey || "") +
+            "      </div>" +
+            "    </div>" +
+            "    <label class='switch ms-2' aria-label='수신자 알림 토글'>" +
+            "      <input type='checkbox' data-user-id='" + escapeHtml(user.id) + "' " +
+            (user.enabled ? "checked " : "") +
+            "onchange='handleUserToggle(this)' />" +
+            "      <span class='slider round'></span>" +
+            "    </label>" +
+            "  </div>" +
+            "  <div class='mode-btn-group'>" + modeButtonsHtml + "</div>" +
+            "</div>";
+        });
+
+        listEl.innerHTML = html;
+      }
+
       function renderAlarms() {
         const listEl = document.getElementById("alarmList");
         const countEl = document.getElementById("alarmCount");
@@ -595,6 +737,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         renderActiveAlert();
         renderTemp();
         renderMaster();
+        renderUsers();
         renderAlarms();
       }
 
@@ -602,6 +745,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         try {
           const data = await apiRequest("/api/state");
           appState = data.state;
+          userList = data.users || [];
           renderAll();
           await refreshTemp(false);
         } catch (err) {
@@ -665,11 +809,63 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             body: JSON.stringify({ masterEnabled: enabled })
           });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderMaster();
           showToast(enabled ? "전체 알람 감시가 작동됩니다." : "전체 알람을 일시정지 했습니다.");
         } catch (err) {
           showToast("변경 실패: " + err.message);
           renderMaster();
+        }
+      }
+
+      async function handleUserToggle(checkboxEl) {
+        const userId = checkboxEl.getAttribute("data-user-id");
+        const enabled = Boolean(checkboxEl.checked);
+        try {
+          const data = await apiRequest("/api/users/" + encodeURIComponent(userId), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: enabled })
+          });
+          appState = data.state;
+          userList = data.users || userList;
+          renderUsers();
+          const target = userList.find(function (u) {
+            return u.id === userId;
+          });
+          const userName = target ? target.name : "수신자";
+          showToast(userName + (enabled ? " 알림을 켰습니다." : " 알림을 껐습니다."));
+        } catch (err) {
+          showToast("수신 설정 변경 실패: " + err.message);
+          renderUsers();
+        }
+      }
+
+      async function handleUserModeClick(btnEl) {
+        const userId = btnEl.getAttribute("data-user-id");
+        const mode = btnEl.getAttribute("data-mode");
+        const modeObj = MODE_OPTIONS.find(function (m) {
+          return m.value === mode;
+        });
+
+        try {
+          const data = await apiRequest("/api/users/" + encodeURIComponent(userId), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mode: mode })
+          });
+          appState = data.state;
+          userList = data.users || userList;
+          renderUsers();
+          const target = userList.find(function (u) {
+            return u.id === userId;
+          });
+          const userName = target ? target.name : "수신자";
+          const label = modeObj ? modeObj.label : mode;
+          showToast(userName + " → " + label + " 설정 완료");
+        } catch (err) {
+          showToast("알림 강도 변경 실패: " + err.message);
+          renderUsers();
         }
       }
 
@@ -748,6 +944,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             })
           });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderAll();
           alarmModal.hide();
           showToast(id ? "알람을 수정했습니다." : "새 알람을 저장했습니다.");
@@ -766,6 +963,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             body: JSON.stringify({ enabled: enabled })
           });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderAlarms();
           showToast(enabled ? "알람을 활성화했습니다." : "알람을 비활성화했습니다.");
         } catch (err) {
@@ -781,6 +979,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
             method: "DELETE"
           });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderAll();
           showToast("알람을 삭제했습니다.");
         } catch (err) {
@@ -795,9 +994,11 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         try {
           const data = await apiRequest("/api/test", { method: "POST" });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderAll();
           window.scrollTo({ top: 0, behavior: "smooth" });
-          showToast("아이폰으로 긴급 테스트 알림을 보냈습니다.");
+          const count = data.delivery && data.delivery.succeeded ? data.delivery.succeeded : 1;
+          showToast("알림 ON 수신자(" + count + "명)에게 테스트 알림을 보냈습니다.");
         } catch (err) {
           alert("테스트 발송 실패: " + err.message);
         } finally {
@@ -810,6 +1011,7 @@ export function renderHtml({ locationName, homeUrl, patrolUrl }) {
         try {
           const data = await apiRequest("/api/ack", { method: "POST" });
           appState = data.state;
+          if (data.users) userList = data.users;
           renderAll();
           showToast("경보 확인 완료 · 평상시 화면으로 복귀했습니다.");
         } catch (err) {

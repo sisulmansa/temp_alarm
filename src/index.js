@@ -1,4 +1,5 @@
 import { renderHtml } from "./ui.js";
+import { USERS } from "./users.js";
 
 const LOCATION = {
   name: "서울시 강서구 마곡중앙10로 30",
@@ -34,12 +35,15 @@ const ALLOWED_SOUNDS = new Set([
   "update"
 ]);
 
+const ALLOWED_MODES = new Set(["vibrate", "low", "medium", "high"]);
+
 const DEFAULT_STATE = {
   masterEnabled: true,
   alarms: [],
   activeAlert: null,
   lastCheck: null,
-  appOrigin: ""
+  appOrigin: "",
+  userSettings: {}
 };
 
 // ============================================================================
@@ -114,6 +118,111 @@ function jsonResponse(data, status = 200) {
       "Cache-Control": "no-store"
     }
   });
+}
+
+// ============================================================================
+// 수신자(users.js + Secret 하위호환) 병합 및 개인 설정 관리
+// ============================================================================
+
+function parseNamedSecretEntry(entry, platform, index) {
+  const colonIdx = entry.indexOf(":");
+  if (colonIdx > 0) {
+    const name = entry.slice(0, colonIdx).trim();
+    const key = entry.slice(colonIdx + 1).trim();
+    if (name && key) {
+      return {
+        id: `secret_${platform}_${index}`,
+        name,
+        platform,
+        key,
+        defaultEnabled: true,
+        defaultMode: "vibrate"
+      };
+    }
+  }
+  return {
+    id: `secret_${platform}_${index}`,
+    name: platform === "iphone" ? `아이폰 ${index + 1}` : `갤럭시 ${index + 1}`,
+    platform,
+    key: entry,
+    defaultEnabled: true,
+    defaultMode: "vibrate"
+  };
+}
+
+function resolveUsers(env, userSettings = {}) {
+  const rawList = [];
+  const seenKeys = new Set();
+
+  // 1) src/users.js에 정의된 사용자 목록 우선 로드
+  if (Array.isArray(USERS)) {
+    USERS.forEach((u, idx) => {
+      const key = String(u?.key || "").trim();
+      if (!key || key.startsWith("여기에_")) return;
+
+      const platform = u.platform === "android" ? "android" : "iphone";
+      const dedupId = `${platform}:${key}`;
+      if (seenKeys.has(dedupId)) return;
+      seenKeys.add(dedupId);
+
+      rawList.push({
+        id: String(u.id || `user_${idx + 1}`).trim(),
+        name: String(u.name || `근무자 ${idx + 1}`).trim(),
+        platform,
+        key,
+        defaultEnabled: typeof u.defaultEnabled === "boolean" ? u.defaultEnabled : true,
+        defaultMode: ALLOWED_MODES.has(u.defaultMode) ? u.defaultMode : "vibrate"
+      });
+    });
+  }
+
+  // 2) Cloudflare Secret(BARK_KEY, NTFY_TOPIC)에 등록된 키도 자동 병합 (중복 제외)
+  parseCsvList(env.BARK_KEY).forEach((entry, idx) => {
+    const item = parseNamedSecretEntry(entry, "iphone", idx);
+    const dedupId = `iphone:${item.key}`;
+    if (!seenKeys.has(dedupId)) {
+      seenKeys.add(dedupId);
+      rawList.push(item);
+    }
+  });
+
+  parseCsvList(env.NTFY_TOPIC).forEach((entry, idx) => {
+    const item = parseNamedSecretEntry(entry, "android", idx);
+    const cleanTopic = item.key
+      .replace(/^https?:\/\/ntfy\.sh\//i, "")
+      .replace(/^\/+|\/+$/g, "")
+      .trim();
+    const dedupId = `android:${cleanTopic}`;
+    if (cleanTopic && !seenKeys.has(dedupId)) {
+      seenKeys.add(dedupId);
+      rawList.push({ ...item, key: cleanTopic });
+    }
+  });
+
+  // 3) KV에 저장된 개인별 ON/OFF 및 진동·음량 설정 적용
+  return rawList.map((u) => {
+    const saved = userSettings && typeof userSettings === "object" ? userSettings[u.id] : null;
+    const enabled =
+      typeof saved?.enabled === "boolean" ? saved.enabled : u.defaultEnabled;
+    const mode = ALLOWED_MODES.has(saved?.mode) ? saved.mode : u.defaultMode;
+    return {
+      ...u,
+      enabled,
+      mode
+    };
+  });
+}
+
+// 브라우저 UI에는 실제 Secret 키를 숨기고 안전한 정보만 전달
+function buildPublicUsers(env, state) {
+  return resolveUsers(env, state.userSettings).map((u) => ({
+    id: u.id,
+    name: u.name,
+    platform: u.platform,
+    enabled: u.enabled,
+    mode: u.mode,
+    maskedKey: maskSecret(u.key)
+  }));
 }
 
 // ============================================================================
@@ -199,7 +308,9 @@ async function loadState(env) {
     alarms: Array.isArray(raw.alarms) ? raw.alarms.map(normalizeAlarm) : [],
     activeAlert: normalizeActiveAlert(raw.activeAlert),
     lastCheck: raw.lastCheck || null,
-    appOrigin: raw.appOrigin || ""
+    appOrigin: raw.appOrigin || "",
+    userSettings:
+      raw.userSettings && typeof raw.userSettings === "object" ? raw.userSettings : {}
   };
 }
 
@@ -391,19 +502,54 @@ async function fetchMagokTemp(env) {
 }
 
 // ============================================================================
-// 긴급 알림 발송 (아이폰 Bark + 안드로이드 ntfy)
+// 긴급 알림 발송 (수신자별 ON/OFF + 진동 전용 및 음량 단계 제어)
 // ============================================================================
 
-async function pushToBark(deviceKey, { title, body, sound, clickUrl }) {
+function getBarkModeParams(mode, alarmSound) {
+  const validSound = ALLOWED_SOUNDS.has(alarmSound) ? alarmSound : "alarm";
+  switch (mode) {
+    case "vibrate":
+      // 소리 출력 0 + 무음 오디오 트랙 + 30초 연속 진동
+      return {
+        level: "critical",
+        volume: 0,
+        sound: "silence",
+        call: "1"
+      };
+    case "low":
+      return {
+        level: "critical",
+        volume: 2,
+        sound: validSound,
+        call: "1"
+      };
+    case "medium":
+      return {
+        level: "critical",
+        volume: 5,
+        sound: validSound,
+        call: "1"
+      };
+    case "high":
+    default:
+      return {
+        level: "critical",
+        volume: 10,
+        sound: validSound,
+        call: "1"
+      };
+  }
+}
+
+async function pushToBark(user, { title, body, sound, clickUrl }) {
   const startedAt = Date.now();
+  const modeParams = getBarkModeParams(user.mode, sound);
+
   const payload = {
-    device_key: deviceKey,
+    device_key: user.key,
     title,
     body,
-    level: "critical",
-    volume: 10,
-    call: "1",
-    sound: ALLOWED_SOUNDS.has(sound) ? sound : "alarm",
+    ...modeParams,
     group: "magok-temp-alarm"
   };
 
@@ -430,38 +576,50 @@ async function pushToBark(deviceKey, { title, body, sound, clickUrl }) {
   }
 
   if (!res.ok || (parsed && parsed.code !== undefined && parsed.code !== 200)) {
-    throw new Error(`Bark 발송 실패 (HTTP ${res.status}): ${parsed?.message || resText}`);
+    throw new Error(`${user.name} Bark 발송 실패 (HTTP ${res.status}): ${parsed?.message || resText}`);
   }
 
   return {
+    userId: user.id,
+    name: user.name,
     channel: "bark",
-    target: maskSecret(deviceKey),
+    mode: user.mode,
+    target: maskSecret(user.key),
     ok: true,
     ms: Date.now() - startedAt
   };
 }
 
-async function pushToNtfy(rawTopic, { title, body, clickUrl }) {
+async function pushToNtfy(user, { title, body, clickUrl }) {
   const startedAt = Date.now();
-  const topic = rawTopic
+  const topic = user.key
     .replace(/^https?:\/\/ntfy\.sh\//i, "")
     .replace(/^\/+|\/+$/g, "")
     .trim();
 
   if (!topic) {
-    throw new Error("ntfy 토픽 이름이 비어 있습니다.");
+    throw new Error(`${user.name} ntfy 토픽 이름이 비어 있습니다.`);
   }
 
-  const payload = {
+  const targetUrl = clickUrl || `https://ntfy.sh/${encodeURIComponent(topic)}`;
+  // 크게(high)일 때만 시계 알람음(priority 5), 진동만/작게/보통은 일반 알림 등급(priority 4)
+  const priority = user.mode === "high" ? 5 : 4;
+
+  const basePayload = {
     topic,
     title,
     message: body,
-    priority: 5
+    priority,
+    click: targetUrl,
+    actions: [
+      {
+        action: "view",
+        label: "알람 끄기 · 화면 확인",
+        url: targetUrl,
+        clear: true
+      }
+    ]
   };
-
-  if (clickUrl) {
-    payload.click = clickUrl;
-  }
 
   const res = await fetchWithTimeout(
     "https://ntfy.sh",
@@ -469,32 +627,58 @@ async function pushToNtfy(rawTopic, { title, body, clickUrl }) {
       method: "POST",
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "User-Agent": "magok-temp-alarm/2.0"
+        "User-Agent": "magok-temp-alarm/2.1"
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(basePayload)
     },
     PUSH_TIMEOUT_MS
   );
 
   const resText = await res.text();
   if (!res.ok) {
-    throw new Error(`ntfy 발송 실패 (HTTP ${res.status}): ${resText}`);
+    throw new Error(`${user.name} ntfy 발송 실패 (HTTP ${res.status}): ${resText}`);
+  }
+
+  // 진동 전용 모드일 때 4초 뒤 2차 진동 펄스 예약 전송 (수면 중 진동 감지 보강)
+  if (user.mode === "vibrate") {
+    await fetchWithTimeout(
+      "https://ntfy.sh",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          "User-Agent": "magok-temp-alarm/2.1"
+        },
+        body: JSON.stringify({
+          ...basePayload,
+          delay: "4s"
+        })
+      },
+      PUSH_TIMEOUT_MS
+    ).catch(() => null);
   }
 
   return {
+    userId: user.id,
+    name: user.name,
     channel: "ntfy",
+    mode: user.mode,
     target: maskSecret(topic),
     ok: true,
     ms: Date.now() - startedAt
   };
 }
 
-async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false }) {
-  const barkKeys = parseCsvList(env.BARK_KEY);
-  const ntfyTopics = parseCsvList(env.NTFY_TOPIC);
+async function sendAlerts(env, state, { alarm, temp, observedAt, origin, isTest = false }) {
+  const allUsers = resolveUsers(env, state.userSettings);
 
-  if (barkKeys.length === 0 && ntfyTopics.length === 0) {
-    throw new Error("Cloudflare Secret에 BARK_KEY 또는 NTFY_TOPIC이 등록되지 않았습니다.");
+  if (allUsers.length === 0) {
+    throw new Error("등록된 수신자가 없습니다. src/users.js 또는 Cloudflare Secret에 키를 등록해 주세요.");
+  }
+
+  const activeUsers = allUsers.filter((u) => u.enabled);
+  if (activeUsers.length === 0) {
+    throw new Error("현재 알림이 켜진(ON) 수신자가 없습니다. 수신자 스위치를 ON으로 켠 뒤 다시 시도해 주세요.");
   }
 
   const rangeText = formatTempRange(alarm.minTemp, alarm.maxTemp);
@@ -509,36 +693,29 @@ async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false
 
   const clickUrl = origin ? `${origin}/?alert=${encodeURIComponent(alarm.id)}` : "";
 
-  const tasks = [
-    ...barkKeys.map((key) =>
-      pushToBark(key, { title, body, sound: alarm.sound, clickUrl }).catch((err) => ({
-        channel: "bark",
-        target: maskSecret(key),
-        ok: false,
-        error: err.message
-      }))
-    ),
-    ...ntfyTopics.map((topic) =>
-      pushToNtfy(topic, { title, body, clickUrl }).catch((err) => ({
-        channel: "ntfy",
-        target: maskSecret(topic),
-        ok: false,
-        error: err.message
-      }))
-    )
-  ];
+  const tasks = activeUsers.map((user) => {
+    const sender = user.platform === "android" ? pushToNtfy : pushToBark;
+    return sender(user, { title, body, sound: alarm.sound, clickUrl }).catch((err) => ({
+      userId: user.id,
+      name: user.name,
+      channel: user.platform === "android" ? "ntfy" : "bark",
+      mode: user.mode,
+      target: maskSecret(user.key),
+      ok: false,
+      error: err.message
+    }));
+  });
 
   const results = await Promise.all(tasks);
   const succeeded = results.filter((r) => r.ok);
   const failed = results.filter((r) => !r.ok);
 
-  // Cloudflare Real-time logs에서 발송 상태를 즉시 판별할 수 있도록 기록
   console.log(
     "[ALERT_DELIVERY]",
     JSON.stringify({
       isTest,
-      barkConfigured: barkKeys.length,
-      ntfyConfigured: ntfyTopics.length,
+      totalUsers: allUsers.length,
+      activeUsers: activeUsers.length,
       results
     })
   );
@@ -548,8 +725,8 @@ async function sendAlerts(env, { alarm, temp, observedAt, origin, isTest = false
   }
 
   return {
-    barkConfigured: barkKeys.length,
-    ntfyConfigured: ntfyTopics.length,
+    totalUsers: allUsers.length,
+    activeUsers: activeUsers.length,
     succeeded: succeeded.length,
     failed: failed.length,
     results
@@ -587,7 +764,7 @@ export default {
 
     const origin = (env.APP_URL || state.appOrigin || "").replace(/\/$/, "");
     try {
-      await sendAlerts(env, {
+      await sendAlerts(env, state, {
         alarm: matchedAlarm,
         temp: tempInfo.temp,
         observedAt: tempInfo.observedAt,
@@ -607,7 +784,7 @@ export default {
         isTest: false
       };
     } catch (err) {
-      console.error("[CRON] 알림 발송 실패:", err.message);
+      console.error("[CRON] 알림 발송 건너뜀/실패:", err.message);
     }
 
     await saveState(env, state);
@@ -643,10 +820,14 @@ export default {
         });
       }
 
-      // 2) 전체 상태 조회
+      // 2) 전체 상태 + 수신자 목록 조회
       if (pathname === "/api/state" && method === "GET") {
         const state = await loadState(env);
-        return jsonResponse({ ok: true, state });
+        return jsonResponse({
+          ok: true,
+          state,
+          users: buildPublicUsers(env, state)
+        });
       }
 
       // 3) 외기온도 조회 (3분 이내 재요청은 캐시로 즉시 응답 -> 기상청 지연·부하 방지)
@@ -699,10 +880,45 @@ export default {
         const state = await loadState(env);
         state.masterEnabled = Boolean(body.masterEnabled);
         await saveState(env, state);
-        return jsonResponse({ ok: true, state });
+        return jsonResponse({
+          ok: true,
+          state,
+          users: buildPublicUsers(env, state)
+        });
       }
 
-      // 5) 알람 신규 추가 (최대 5개, 구간 중복 방지)
+      // 5) 수신자별 ON/OFF 및 진동·음량 모드 변경
+      if (pathname.startsWith("/api/users/") && method === "PUT") {
+        const userId = decodeURIComponent(pathname.slice("/api/users/".length));
+        const state = await loadState(env);
+        const allUsers = resolveUsers(env, state.userSettings);
+        const target = allUsers.find((u) => u.id === userId);
+
+        if (!target) {
+          return jsonResponse({ ok: false, error: "해당 수신자를 찾을 수 없습니다." }, 404);
+        }
+
+        const body = await request.json();
+        const nextSetting = {
+          enabled:
+            typeof body.enabled === "boolean" ? body.enabled : target.enabled,
+          mode: ALLOWED_MODES.has(body.mode) ? body.mode : target.mode
+        };
+
+        state.userSettings = {
+          ...(state.userSettings || {}),
+          [userId]: nextSetting
+        };
+
+        await saveState(env, state);
+        return jsonResponse({
+          ok: true,
+          state,
+          users: buildPublicUsers(env, state)
+        });
+      }
+
+      // 6) 알람 신규 추가 (최대 5개, 구간 중복 방지)
       if (pathname === "/api/alarms" && method === "POST") {
         const body = await request.json();
         const state = await loadState(env);
@@ -748,10 +964,15 @@ export default {
 
         state.alarms.push(newAlarm);
         await saveState(env, state);
-        return jsonResponse({ ok: true, alarm: newAlarm, state });
+        return jsonResponse({
+          ok: true,
+          alarm: newAlarm,
+          state,
+          users: buildPublicUsers(env, state)
+        });
       }
 
-      // 6) 개별 알람 수정 / 토글 / 삭제
+      // 7) 개별 알람 수정 / 토글 / 삭제
       if (pathname.startsWith("/api/alarms/")) {
         const id = decodeURIComponent(pathname.slice("/api/alarms/".length));
         const state = await loadState(env);
@@ -810,7 +1031,11 @@ export default {
           }
 
           await saveState(env, state);
-          return jsonResponse({ ok: true, state });
+          return jsonResponse({
+            ok: true,
+            state,
+            users: buildPublicUsers(env, state)
+          });
         }
 
         if (method === "DELETE") {
@@ -819,19 +1044,27 @@ export default {
             state.activeAlert = null;
           }
           await saveState(env, state);
-          return jsonResponse({ ok: true, state });
+          return jsonResponse({
+            ok: true,
+            state,
+            users: buildPublicUsers(env, state)
+          });
         }
       }
 
-      // 7) 강조 카드 확인 완료 (강조 해제)
+      // 8) 강조 카드 확인 완료 (강조 해제)
       if (pathname === "/api/ack" && method === "POST") {
         const state = await loadState(env);
         state.activeAlert = null;
         await saveState(env, state);
-        return jsonResponse({ ok: true, state });
+        return jsonResponse({
+          ok: true,
+          state,
+          users: buildPublicUsers(env, state)
+        });
       }
 
-      // 8) 수동 테스트 알림 발송 (저장된 기온 즉시 사용 -> 1초 내 완료)
+      // 9) 수동 테스트 알림 발송 (저장된 기온 즉시 사용 -> ON 상태 수신자에게만 발송)
       if (pathname === "/api/test" && method === "POST") {
         const state = await loadState(env);
         let tempInfo = state.lastCheck;
@@ -864,7 +1097,7 @@ export default {
 
         state.appOrigin = url.origin;
 
-        const delivery = await sendAlerts(env, {
+        const delivery = await sendAlerts(env, state, {
           alarm: sampleAlarm,
           temp: tempInfo.temp,
           observedAt: tempInfo.observedAt,
@@ -885,7 +1118,12 @@ export default {
         };
 
         await saveState(env, state);
-        return jsonResponse({ ok: true, state, delivery });
+        return jsonResponse({
+          ok: true,
+          state,
+          users: buildPublicUsers(env, state),
+          delivery
+        });
       }
 
       return jsonResponse({ ok: false, error: "Not Found" }, 404);
