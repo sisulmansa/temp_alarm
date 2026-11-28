@@ -31,7 +31,7 @@ export const USERS = [
     id: "worker_2",
     name: "엣지폰 (Galaxy)",
     platform: "android",
-    key: "NTFY_TOPIC",
+    key: "magok-temp-alarm-8k4p2x9q7m",
     defaultEnabled: false,
     defaultMode: "vibrate"
   }
