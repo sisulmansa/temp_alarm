@@ -18,21 +18,21 @@ export const USERS = [
     defaultEnabled: true,
     defaultMode: "vibrate"
   },
-  {
-    id: "worker_2",
-    name: "근무자 2 (iPhone)",
-    platform: "iphone",
-    key: "여기에_두번째_아이폰_BARK_KEY_입력",
-    defaultEnabled: true,
-    defaultMode: "vibrate"
-  }
-  // 갤럭시(ntfy) 사용자를 추가할 때는 아래 주석(//)을 풀고 입력하세요.
-  // ,{
-  //   id: "worker_3",
-  //   name: "근무자 3 (Galaxy)",
-  //   platform: "android",
-  //   key: "여기에_NTFY_TOPIC_입력",
-  //   defaultEnabled: false,
+  // {
+  //   id: "worker_2",
+  //   name: "근무자 2 (iPhone)",
+  //   platform: "iphone",
+  //   key: "여기에_두번째_아이폰_BARK_KEY_입력",
+  //   defaultEnabled: true,
   //   defaultMode: "vibrate"
   // }
+  // 갤럭시(ntfy) 사용자를 추가할 때는 아래 주석(//)을 풀고 입력하세요.
+  ,{
+    id: "worker_2",
+    name: "엣지폰 (Galaxy)",
+    platform: "android",
+    key: "NTFY_TOPIC",
+    defaultEnabled: false,
+    defaultMode: "vibrate"
+  }
 ];
