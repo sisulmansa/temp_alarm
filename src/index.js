@@ -16,6 +16,10 @@ const TEMP_CACHE_TTL_MS = 3 * 60 * 1000; // 웹 1분 자동갱신용 기상청 3
 const KMA_TIMEOUT_MS = 4500;
 const PUSH_TIMEOUT_MS = 6000;
 
+// '진동만' 모드일 때 전화벨처럼 연속 진동을 유도하기 위한 반복 횟수 및 간격
+const VIBRATE_REPEAT_COUNT = 5;
+const VIBRATE_INTERVAL_MS = 3500;
+
 const ALLOWED_SOUNDS = new Set([
   "alarm",
   "bell",
@@ -49,6 +53,10 @@ const DEFAULT_STATE = {
 // ============================================================================
 // 공통 유틸리티
 // ============================================================================
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function getKstDate(offsetMinutes = 0) {
   return new Date(Date.now() + (9 * 60 + offsetMinutes) * 60 * 1000);
@@ -502,19 +510,18 @@ async function fetchMagokTemp(env) {
 }
 
 // ============================================================================
-// 긴급 알림 발송 (수신자별 ON/OFF + 진동 전용 및 음량 단계 제어)
+// 긴급 알림 발송 (수신자별 ON/OFF + 연속 진동 및 음량 단계 제어)
 // ============================================================================
 
 function getBarkModeParams(mode, alarmSound) {
   const validSound = ALLOWED_SOUNDS.has(alarmSound) ? alarmSound : "alarm";
   switch (mode) {
     case "vibrate":
-      // 소리 출력 0 + 무음 오디오 트랙 + 30초 연속 진동
+      // 소리 출력 0 + 무음 오디오 트랙 (iOS 도착 진동 펄스 유발용)
       return {
         level: "critical",
         volume: 0,
-        sound: "silence",
-        call: "1"
+        sound: "silence"
       };
     case "low":
       return {
@@ -605,7 +612,7 @@ async function pushToNtfy(user, { title, body, clickUrl }) {
   // 크게(high)일 때만 시계 알람음(priority 5), 진동만/작게/보통은 일반 알림 등급(priority 4)
   const priority = user.mode === "high" ? 5 : 4;
 
-  const basePayload = {
+  const payload = {
     topic,
     title,
     message: body,
@@ -627,9 +634,9 @@ async function pushToNtfy(user, { title, body, clickUrl }) {
       method: "POST",
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "User-Agent": "magok-temp-alarm/2.1"
+        "User-Agent": "magok-temp-alarm/2.2"
       },
-      body: JSON.stringify(basePayload)
+      body: JSON.stringify(payload)
     },
     PUSH_TIMEOUT_MS
   );
@@ -637,25 +644,6 @@ async function pushToNtfy(user, { title, body, clickUrl }) {
   const resText = await res.text();
   if (!res.ok) {
     throw new Error(`${user.name} ntfy 발송 실패 (HTTP ${res.status}): ${resText}`);
-  }
-
-  // 진동 전용 모드일 때 4초 뒤 2차 진동 펄스 예약 전송 (수면 중 진동 감지 보강)
-  if (user.mode === "vibrate") {
-    await fetchWithTimeout(
-      "https://ntfy.sh",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          "User-Agent": "magok-temp-alarm/2.1"
-        },
-        body: JSON.stringify({
-          ...basePayload,
-          delay: "4s"
-        })
-      },
-      PUSH_TIMEOUT_MS
-    ).catch(() => null);
   }
 
   return {
@@ -669,7 +657,20 @@ async function pushToNtfy(user, { title, body, clickUrl }) {
   };
 }
 
-async function sendAlerts(env, state, { alarm, temp, observedAt, origin, isTest = false }) {
+function sendSingleUserOnce(user, payload) {
+  const sender = user.platform === "android" ? pushToNtfy : pushToBark;
+  return sender(user, payload).catch((err) => ({
+    userId: user.id,
+    name: user.name,
+    channel: user.platform === "android" ? "ntfy" : "bark",
+    mode: user.mode,
+    target: maskSecret(user.key),
+    ok: false,
+    error: err.message
+  }));
+}
+
+async function sendAlerts(env, state, ctx, { alarm, temp, observedAt, origin, isTest = false }) {
   const allUsers = resolveUsers(env, state.userSettings);
 
   if (allUsers.length === 0) {
@@ -693,20 +694,13 @@ async function sendAlerts(env, state, { alarm, temp, observedAt, origin, isTest 
 
   const clickUrl = origin ? `${origin}/?alert=${encodeURIComponent(alarm.id)}` : "";
 
-  const tasks = activeUsers.map((user) => {
-    const sender = user.platform === "android" ? pushToNtfy : pushToBark;
-    return sender(user, { title, body, sound: alarm.sound, clickUrl }).catch((err) => ({
-      userId: user.id,
-      name: user.name,
-      channel: user.platform === "android" ? "ntfy" : "bark",
-      mode: user.mode,
-      target: maskSecret(user.key),
-      ok: false,
-      error: err.message
-    }));
-  });
+  // 1회차 즉시 발송 (모든 활성 수신자)
+  const results = await Promise.all(
+    activeUsers.map((user) =>
+      sendSingleUserOnce(user, { title, body, sound: alarm.sound, clickUrl })
+    )
+  );
 
-  const results = await Promise.all(tasks);
   const succeeded = results.filter((r) => r.ok);
   const failed = results.filter((r) => !r.ok);
 
@@ -722,6 +716,34 @@ async function sendAlerts(env, state, { alarm, temp, observedAt, origin, isTest 
 
   if (succeeded.length === 0) {
     throw new Error(failed.map((f) => f.error).join(" / ") || "알림 발송 실패");
+  }
+
+  // '진동만(vibrate)' 수신자는 iOS/Android 모두 1회만 진동하고 멈추지 않도록
+  // 백그라운드(ctx.waitUntil)에서 3.5초 간격으로 추가 진동 펄스(2~5회차)를 연속 발송
+  const vibrateUsers = activeUsers.filter((u) => u.mode === "vibrate");
+  if (vibrateUsers.length > 0 && VIBRATE_REPEAT_COUNT > 1) {
+    const runFollowUpVibrations = async () => {
+      for (let round = 2; round <= VIBRATE_REPEAT_COUNT; round++) {
+        await sleep(VIBRATE_INTERVAL_MS);
+        const pulseTitle = `📳 [진동 알림 ${round}/${VIBRATE_REPEAT_COUNT}] ${alarm.title}`;
+        await Promise.allSettled(
+          vibrateUsers.map((user) =>
+            sendSingleUserOnce(user, {
+              title: pulseTitle,
+              body,
+              sound: alarm.sound,
+              clickUrl
+            })
+          )
+        );
+      }
+    };
+
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(runFollowUpVibrations());
+    } else {
+      await runFollowUpVibrations();
+    }
   }
 
   return {
@@ -764,7 +786,7 @@ export default {
 
     const origin = (env.APP_URL || state.appOrigin || "").replace(/\/$/, "");
     try {
-      await sendAlerts(env, state, {
+      await sendAlerts(env, state, ctx, {
         alarm: matchedAlarm,
         temp: tempInfo.temp,
         observedAt: tempInfo.observedAt,
@@ -1097,7 +1119,7 @@ export default {
 
         state.appOrigin = url.origin;
 
-        const delivery = await sendAlerts(env, state, {
+        const delivery = await sendAlerts(env, state, ctx, {
           alarm: sampleAlarm,
           temp: tempInfo.temp,
           observedAt: tempInfo.observedAt,
